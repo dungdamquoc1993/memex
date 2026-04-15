@@ -23,24 +23,125 @@ OpenClaw
 
 ## Install
 
-**Once published to npm/bun registry:**
+**Requirement:** [Bun](https://bun.sh) >= 1.3 must be available in `PATH`.
+
+`memex` is distributed through the npm registry. You can install it with either npm or Bun.
+
+### Install from npm registry
+
+Using npm:
+
+```sh
+npm install -g @dungdq3/memex
+memex --help
+```
+
+Using Bun:
 
 ```sh
 bun add -g @dungdq3/memex
-# or
-npm i -g @dungdq3/memex
+memex --help
 ```
 
-**For now — clone and link:**
+Both commands install the published package from the npm registry. The CLI itself still runs with Bun because `bin/memex` uses `#!/usr/bin/env bun`.
+
+### Local development install
+
+Use `bun link` when you want the global `memex` command to run directly from your local checkout:
 
 ```sh
 git clone https://github.com/dungdamquoc1993/memex.git
 cd memex
 bun install
 bun link
+memex --help
 ```
 
-**Requirements:** [Bun](https://bun.sh) ≥ 1.3
+With `bun link`, edits in the repo affect the global `memex` command immediately.
+
+### Check where `memex` is coming from
+
+Use these commands whenever you are not sure whether `memex` is coming from npm, Bun, or a local link:
+
+```sh
+which -a memex
+ls -l "$(which memex)"
+realpath "$(which memex)"
+```
+
+Common results:
+
+```text
+/usr/local/bin/memex
+```
+
+Usually means npm global from the system npm. Confirm with:
+
+```sh
+ls -l /usr/local/bin/memex
+/usr/local/bin/npm list -g --depth=0 @dungdq3/memex
+```
+
+```text
+/Users/<you>/.nvm/versions/node/<version>/bin/memex
+```
+
+Means npm global from the active nvm Node/npm. Confirm with:
+
+```sh
+which npm
+npm prefix -g
+npm list -g --depth=0 @dungdq3/memex
+```
+
+```text
+/Users/<you>/.bun/bin/memex
+```
+
+Means Bun global or a Bun local link. Confirm with:
+
+```sh
+ls -l ~/.bun/bin/memex
+ls -l ~/.bun/install/global/node_modules
+```
+
+If `~/.bun/install/global/node_modules/memex` or `~/.bun/install/global/node_modules/@dungdq3/memex` points to your local checkout, you are using a local `bun link`.
+
+### Uninstall and clean old links
+
+Remove npm global installs:
+
+```sh
+npm uninstall -g @dungdq3/memex
+/usr/local/bin/npm uninstall -g @dungdq3/memex
+```
+
+Remove Bun global installs:
+
+```sh
+bun remove --global @dungdq3/memex
+```
+
+Remove a current local Bun link from inside the repo:
+
+```sh
+cd memex
+bun unlink
+```
+
+If you previously linked the package under an old package name, stale symlinks can remain. Remove only the memex symlinks:
+
+```sh
+rm -f ~/.bun/bin/memex
+rm -f ~/.bun/install/global/node_modules/memex
+rm -f ~/.bun/install/global/node_modules/@dungdq3/memex
+```
+
+Verify that the command is gone:
+
+```sh
+which -a memex
+```
 
 ---
 
