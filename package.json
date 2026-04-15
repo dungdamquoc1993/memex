@@ -1,10 +1,10 @@
 {
-  "name": "memex",
+  "name": "@dungdq3/memex",
   "version": "0.1.0",
   "description": "CLI tool that aggregates AI chat history from multiple platforms into a searchable Markdown archive",
   "type": "module",
   "bin": {
-    "memex": "./bin/memex"
+    "memex": "bin/memex"
   },
   "scripts": {
     "build": "bun build src/cli/main.ts --outdir dist --target bun",
@@ -22,11 +22,20 @@
     "markdown",
     "llm"
   ],
-  "author": "memex contributors",
+  "author": "dungdamquoc",
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dungdamquoc1993/memex.git"
+    "url": "git+https://github.com/dungdamquoc1993/memex.git"
   },
   "homepage": "https://github.com/dungdamquoc1993/memex",
   "engines": {

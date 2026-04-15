@@ -1,6 +1,6 @@
 # memex
 
-[![npm version](https://img.shields.io/npm/v/memex.svg?style=flat)](https://www.npmjs.com/package/memex)
+[![npm version](https://img.shields.io/npm/v/@dungdq3/memex.svg?style=flat)](https://www.npmjs.com/package/@dungdq3/memex)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![CI](https://github.com/dungdamquoc1993/memex/actions/workflows/ci.yml/badge.svg)](https://github.com/dungdamquoc1993/memex/actions/workflows/ci.yml)
 
@@ -26,9 +26,9 @@ OpenClaw
 **Once published to npm/bun registry:**
 
 ```sh
-bun add -g memex
+bun add -g @dungdq3/memex
 # or
-npm i -g memex
+npm i -g @dungdq3/memex
 ```
 
 **For now — clone and link:**
