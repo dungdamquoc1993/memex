@@ -4,18 +4,18 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![CI](https://github.com/dungdamquoc1993/memex/actions/workflows/ci.yml/badge.svg)](https://github.com/dungdamquoc1993/memex/actions/workflows/ci.yml)
 
-**memex** is a CLI tool that aggregates your AI chat history from multiple platforms into a single, searchable Markdown archive at `~/.memex/`. It integrates with [qmd](https://github.com/dungdamquoc1993/qmd) for semantic search and LLM context injection.
+**memex** is a CLI tool that aggregates your AI chat history from multiple platforms into a single, searchable Markdown archive. It integrates with [qmd](https://github.com/dungdamquoc1993/qmd) for semantic search and LLM context injection.
 
 ```
-AI Platforms          memex sync          ~/.memex/              qmd
+AI Platforms          memex sync         workdir/               qmd
 ─────────────    ──────────────────▶    ───────────────    ──────────────
 Claude Code            convert            memory/          qmd search
 ChatGPT           (normalize to .md)     wiki/            qmd query
-Claude.ai                                state/sync.db
-Gemini
-Grok
-DeepSeek
-Codex
+Claude.ai
+Gemini                                  ~/.memex/
+Grok                                     state/sync.db
+DeepSeek                                 logs/
+Codex                                    config.json
 OpenClaw
 ```
 
@@ -148,8 +148,11 @@ which -a memex
 ## Quick Start
 
 ```sh
-# 1. Initialize ~/.memex/ directory structure (run once)
+# 1. Initialize profile (default workdir = ~/.memex)
 memex init
+
+# Or choose a custom workdir (e.g. Dropbox, iCloud, a git repo)
+memex init --workdir ~/Dropbox/memex-data
 
 # 2. Sync Claude Code conversations (fully automatic — reads ~/.claude/projects/)
 memex sync claude_code
@@ -160,7 +163,7 @@ memex sync-script chatgpt
 
 #    Open chatgpt.com → DevTools (F12) → Console → paste → Enter
 #    Move the downloaded file, then sync:
-mv ~/Downloads/chatgpt_*.json ~/.memex/memory/raw/chatgpt/
+mv ~/Downloads/chatgpt_*.json "$(memex config get workdir)/memory/raw/chatgpt/"
 memex sync chatgpt
 
 # 4. Check status
@@ -171,9 +174,19 @@ memex status
 
 ## Commands
 
-### `memex init`
+### `memex init [--workdir <path>]`
 
-Initialize `~/.memex/` directory structure. Run once after install.
+Initialize the memex profile. Run once after install.
+
+- Internal state (`state/`, `logs/`, `config.json`) always lives in `~/.memex/`.
+- User content (`memory/`, `wiki/`, `scripts/`) goes into the **workdir** — defaults to `~/.memex/` but can be set to any path (Dropbox, iCloud Drive, a git repo, etc.).
+
+```sh
+memex init                              # workdir = ~/.memex (default)
+memex init --workdir ~/Dropbox/memex   # workdir = ~/Dropbox/memex
+```
+
+The chosen workdir is persisted to `~/.memex/config.json` so subsequent commands pick it up automatically.
 
 ---
 
@@ -226,9 +239,22 @@ deepseek        |           25 | 2026-04-15 06:57:29
 
 ---
 
+### `memex config <subcommand>`
+
+Read and write `~/.memex/config.json`.
+
+```sh
+memex config list                       # print full config
+memex config get workdir                # print current workdir path
+memex config set workdir ~/new/path     # update workdir pointer (does not move data)
+memex config path                       # print path to config.json
+```
+
+---
+
 ### `memex export [file]`
 
-Back up the entire `~/.memex/` profile (including `memory/`, `wiki/`, `scripts/`, `state/`, `logs/`) to a `.tar.gz` archive.
+Back up both the profile root (`~/.memex/`) and the workdir to a single `.tar.gz` archive.
 
 ```sh
 memex export                            # creates ./memex-profile-YYYYMMDD-HHMMSS.tar.gz
@@ -247,14 +273,19 @@ memex verify ~/backup/memex.tar.gz
 
 ---
 
-### `memex import <file> [--replace]`
+### `memex import <file> [--replace] [--workdir <path>]`
 
-Restore a backup. Fails if `~/.memex/` already exists unless `--replace` is passed (moves the existing profile to `~/.memex.backup-YYYYMMDD-HHMMSS` first).
+Restore a backup. Fails if target paths already exist unless `--replace` is passed (moves existing data to `*.backup-<timestamp>` first, never deletes).
 
 ```sh
 memex import ~/backup/memex.tar.gz
 memex import ~/backup/memex.tar.gz --replace
+
+# Restore to a different workdir (e.g. when moving to a new machine)
+memex import ~/backup/memex.tar.gz --workdir ~/new/memex-data
 ```
+
+If the archive's original workdir path is not available on the current machine, memex will fail with a clear error and suggest the `--workdir` flag rather than silently restoring to the wrong location.
 
 ---
 
@@ -273,10 +304,19 @@ memex import ~/backup/memex.tar.gz --replace
 
 ---
 
-## Profile Structure
+## Directory Structure
+
+memex separates internal state from user content into two roots:
 
 ```
-~/.memex/
+~/.memex/                             # Profile root — always here, internal
+├── state/
+│   └── sync.db                       # SQLite dedup tracking
+├── logs/
+│   └── sync.log
+└── config.json                       # workdir path + settings
+
+<workdir>/                            # Configurable — default is also ~/.memex
 ├── memory/                           # Immutable — written by memex only
 │   ├── chatgpt/
 │   │   └── 2026/04/<id>.md           # Normalized Markdown
@@ -301,11 +341,14 @@ memex import ~/backup/memex.tar.gz --replace
 │   ├── profile.md                    # Personal context — LLM compiled
 │   └── index.md                      # Content catalog
 │
-├── state/
-│   └── sync.db                       # SQLite dedup tracking
-└── logs/
-    └── sync.log
+└── scripts/                          # Generated browser export scripts
 ```
+
+**Workdir resolution order** (highest priority first):
+1. `--workdir <path>` CLI flag
+2. `MEMEX_WORKDIR` environment variable
+3. `workdir` field in `~/.memex/config.json`
+4. Default: `~/.memex`
 
 **Rules:**
 - `memory/` and `wiki/` contain only `.md` files — these are what qmd indexes.
@@ -349,9 +392,9 @@ Response content...
 ## qmd Integration
 
 ```sh
-# Register collections (once)
-qmd collection add ~/.memex/memory --name memex-memory
-qmd collection add ~/.memex/wiki --name memex-wiki
+# Register collections (once) — use your actual workdir path
+qmd collection add "$(memex config get workdir)/memory" --name memex-memory
+qmd collection add "$(memex config get workdir)/wiki" --name memex-wiki
 
 # Add as LLM context
 qmd context add qmd://memex-memory "Personal AI chat history: ChatGPT, Claude, Gemini, Grok, DeepSeek, Claude Code, Codex, OpenClaw"
