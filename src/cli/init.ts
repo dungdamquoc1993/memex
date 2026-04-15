@@ -1,0 +1,68 @@
+import { mkdir } from 'fs/promises';
+import { existsSync } from 'fs';
+import { paths } from '../profile/paths.ts';
+
+const SOURCES = ['chatgpt', 'claude_web', 'gemini', 'claude_code', 'codex', 'openclaw', 'grok', 'deepseek'];
+
+export async function init() {
+  if (existsSync(paths.root)) {
+    console.log(`Profile already exists at ${paths.root}`);
+    console.log('Ensuring all directories exist...');
+  }
+
+  // Memory directories (chỉ .md conversation files — qmd indexes here)
+  for (const source of SOURCES) {
+    await mkdir(paths.memorySource(source), { recursive: true });
+  }
+
+  // Raw directories (JSON exports — NOT indexed by qmd)
+  for (const source of ['chatgpt', 'claude_web', 'gemini', 'grok', 'deepseek']) {
+    await mkdir(paths.rawSource(source), { recursive: true });
+  }
+
+  // Attachment directories (binary/media — NOT indexed by qmd)
+  for (const source of SOURCES) {
+    await mkdir(paths.attachmentsSource(source), { recursive: true });
+  }
+
+  // Wiki directories (curated .md notes — qmd indexes here)
+  await mkdir(paths.wiki, { recursive: true });
+  await mkdir(paths.wikiDomains, { recursive: true });
+
+  // References (raw reference files — NOT indexed by qmd)
+  await mkdir(paths.references, { recursive: true });
+
+  // Scripts
+  await mkdir(paths.scripts, { recursive: true });
+
+  // State & logs
+  await mkdir(paths.state, { recursive: true });
+  await mkdir(paths.logs, { recursive: true });
+
+  console.log(`Initialized memex profile at ${paths.root}`);
+  console.log(`
+Next steps:
+  1. Generate a browser export script:
+       memex sync-script chatgpt
+       memex sync-script claude
+       memex sync-script gemini
+       memex sync-script grok
+       memex sync-script deepseek
+
+  2. Paste the script into your browser console, download the JSON.
+
+  3. Move the downloaded file into the matching folder:
+       ${paths.rawSource('chatgpt')}/
+       ${paths.rawSource('claude_web')}/
+       ${paths.rawSource('gemini')}/
+       ${paths.rawSource('grok')}/
+       ${paths.rawSource('deepseek')}/
+
+  4. Run: memex sync
+
+  5. Setup qmd collections (one-time):
+       qmd collection add ${paths.memory} --name memex-memory
+       qmd collection add ${paths.wiki} --name memex-wiki
+       qmd update && qmd embed
+`);
+}
