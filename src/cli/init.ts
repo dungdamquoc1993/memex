@@ -1,14 +1,23 @@
 import { mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { paths } from '../profile/paths.ts';
+import { saveConfig } from './config.ts';
 
 const SOURCES = ['chatgpt', 'claude_web', 'gemini', 'claude_code', 'codex', 'openclaw', 'grok', 'deepseek'];
 
-export async function init() {
-  if (existsSync(paths.root)) {
-    console.log(`Profile already exists at ${paths.root}`);
+export async function init(opts: { workdirFlag?: string } = {}): Promise<void> {
+  if (existsSync(paths.profileRoot)) {
+    console.log(`Profile already exists at ${paths.profileRoot}`);
     console.log('Ensuring all directories exist...');
   }
+
+  // Profile root (internal)
+  await mkdir(paths.profileRoot, { recursive: true });
+  await mkdir(paths.state, { recursive: true });
+  await mkdir(paths.logs, { recursive: true });
+
+  // Workdir (user-facing)
+  await mkdir(paths.workdir, { recursive: true });
 
   // Memory directories (chỉ .md conversation files — qmd indexes here)
   for (const source of SOURCES) {
@@ -25,21 +34,25 @@ export async function init() {
     await mkdir(paths.attachmentsSource(source), { recursive: true });
   }
 
-  // Wiki directories (curated .md notes — qmd indexes here)
+  // Wiki directories
   await mkdir(paths.wiki, { recursive: true });
   await mkdir(paths.wikiDomains, { recursive: true });
-
-  // References (raw reference files — NOT indexed by qmd)
   await mkdir(paths.references, { recursive: true });
 
   // Scripts
   await mkdir(paths.scripts, { recursive: true });
 
-  // State & logs
-  await mkdir(paths.state, { recursive: true });
-  await mkdir(paths.logs, { recursive: true });
+  // Persist workdir to config.json (idempotent — always record current choice).
+  // Source of truth for resolution: flag > env > config > default. We save the
+  // effective workdir so future invocations without flag/env still use it.
+  await saveConfig({ workdir: paths.workdir });
 
-  console.log(`Initialized memex profile at ${paths.root}`);
+  console.log(`Initialized memex`);
+  console.log(`  Profile: ${paths.profileRoot}  (state, logs, config)`);
+  console.log(`  Workdir: ${paths.workdir}  (memory, wiki, scripts)`);
+  if (opts.workdirFlag) {
+    console.log(`  (workdir set via --workdir; persisted to ${paths.configFile})`);
+  }
   console.log(`
 Next steps:
   1. Generate a browser export script:

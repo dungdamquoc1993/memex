@@ -68,7 +68,7 @@ function pathStatus(path: string): string {
 }
 
 export async function status() {
-  if (!existsSync(paths.root)) {
+  if (!existsSync(paths.profileRoot)) {
     console.log('No memex profile found. Run: memex init');
     return;
   }
@@ -93,7 +93,8 @@ export async function status() {
 
   // ── Profile paths ──
   console.log('Profile folders');
-  console.log(`  ${'Root'.padEnd(12)} ${paths.root}${pathStatus(paths.root)}`);
+  console.log(`  ${'Profile'.padEnd(12)} ${paths.profileRoot}${pathStatus(paths.profileRoot)}`);
+  console.log(`  ${'Workdir'.padEnd(12)} ${paths.workdir}${pathStatus(paths.workdir)}`);
   console.log(`  ${'Memory'.padEnd(12)} ${paths.memory}${pathStatus(paths.memory)}`);
   console.log(`  ${'Raw'.padEnd(12)} ${paths.raw}${pathStatus(paths.raw)}`);
   console.log(`  ${'Attachments'.padEnd(12)} ${paths.attachments}${pathStatus(paths.attachments)}`);
@@ -188,8 +189,9 @@ export async function status() {
   }
 
   // ── Total disk usage ──
-  const totalDisk = dirSize(paths.root);
-  console.log(`Total disk usage: ${formatBytes(totalDisk)}`);
+  const profileSize = dirSize(paths.profileRoot);
+  const workdirSize = paths.workdir === paths.profileRoot ? 0 : dirSize(paths.workdir);
+  console.log(`Total disk usage: ${formatBytes(profileSize + workdirSize)}`);
 
   closeDb();
 }
