@@ -78,7 +78,7 @@ async function rebuildIndex(): Promise<number> {
   return count;
 }
 
-export async function sync(sourceArg?: string, dryRun = false, opts: { noIndex?: boolean; rebuildIndex?: boolean } = {}) {
+export async function sync(sourceArg?: string, dryRun = false, opts: { noIndex?: boolean; rebuildIndex?: boolean; force?: boolean } = {}) {
   if (sourceArg === 'claude') sourceArg = 'claude_web';
 
   const doIndex = !dryRun && !opts.noIndex;
@@ -112,7 +112,7 @@ export async function sync(sourceArg?: string, dryRun = false, opts: { noIndex?:
       for await (const conv of adapter.sync()) {
         const md = conversationToMarkdown(conv);
         const hash = hashContent(md);
-        const action = checkSync(source, conv.id, hash);
+        const action = opts.force ? (checkSync(source, conv.id, hash) === 'insert' ? 'insert' : 'update') : checkSync(source, conv.id, hash);
 
         if (action === 'skip') {
           skippedCount++;

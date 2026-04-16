@@ -39,7 +39,8 @@ async function main() {
       const dryRun = args.includes('--dry-run');
       const noIndex = args.includes('--no-index');
       const rebuildIndex = args.includes('--rebuild-index');
-      await sync(sourceArg, dryRun, { noIndex, rebuildIndex });
+      const force = args.includes('--force');
+      await sync(sourceArg, dryRun, { noIndex, rebuildIndex, force });
       break;
     }
     case 'search':
@@ -74,10 +75,11 @@ async function main() {
 
 Usage:
   memex init [--workdir <path>]       Create profile (state in ~/.memex, content in <workdir>)
-  memex sync [source] [--dry-run] [--no-index] [--rebuild-index]
+  memex sync [source] [--dry-run] [--no-index] [--rebuild-index] [--force]
                                       Sync chat history (chatgpt, claude, claude_code, gemini, codex, openclaw, grok, deepseek)
                                       --no-index: skip indexing during sync
                                       --rebuild-index: rebuild index from all existing .md files
+                                      --force: re-process all conversations even if source is unchanged
   memex search [--source X] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
                [--model X] [--project X] [--search text] [--limit N] [--all] [--json]
                                       Search conversations (default: 20 results, use --all for everything)

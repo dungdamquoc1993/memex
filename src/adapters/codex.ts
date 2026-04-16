@@ -113,6 +113,13 @@ export class CodexAdapter implements Adapter {
         continue;
       }
 
+      if (event.type === 'turn_context') {
+        if (!model) {
+          model = (event.payload.model as string) || null;
+        }
+        continue;
+      }
+
       if (event.type !== 'response_item') continue;
 
       const payload = event.payload;
@@ -120,6 +127,9 @@ export class CodexAdapter implements Adapter {
       const role = payload.role as string | undefined;
 
       if (pType === 'message' && role) {
+        // Skip developer/system messages — they contain Codex boilerplate instructions
+        if (role === 'developer' || role === 'system') continue;
+
         const mappedRole = this.mapRole(role);
         if (!mappedRole) continue;
 
@@ -140,12 +150,19 @@ export class CodexAdapter implements Adapter {
         let input = args;
         try {
           const parsed = JSON.parse(args);
-          input = parsed.cmd || args;
+          // Codex uses {command: [...]} format; fallback to cmd or raw args
+          if (Array.isArray(parsed.command)) {
+            input = parsed.command.join(' ');
+          } else {
+            input = parsed.cmd || args;
+          }
         } catch {}
         pendingCalls.set(callId, { name, input });
       } else if (pType === 'function_call_output') {
         const callId = payload.call_id as string || '';
-        const output = (payload.output as string || '').slice(0, 2000);
+        const rawOutput = payload.output as string || '';
+        const cleaned = this.cleanToolOutput(rawOutput);
+        const output = cleaned.slice(0, 2000);
         const call = pendingCalls.get(callId);
         if (call) {
           messages.push({
@@ -156,7 +173,7 @@ export class CodexAdapter implements Adapter {
               name: call.name,
               input: call.input,
               output,
-              truncated: (payload.output as string || '').length > 2000,
+              truncated: cleaned.length > 2000,
             }],
           });
           pendingCalls.delete(callId);
@@ -208,7 +225,6 @@ export class CodexAdapter implements Adapter {
     switch (role) {
       case 'user': return 'user';
       case 'assistant': return 'assistant';
-      case 'developer': return 'system';
       default: return null;
     }
   }
@@ -220,10 +236,27 @@ export class CodexAdapter implements Adapter {
     for (const block of content) {
       const type = block.type as string;
       if ((type === 'input_text' || type === 'output_text') && block.text) {
-        blocks.push({ type: 'text', text: block.text });
+        // Strip <environment_context>...</environment_context> XML blocks (Codex metadata noise)
+        const text = (block.text as string).replace(/<environment_context>[\s\S]*?<\/environment_context>\s*/g, '').trim();
+        if (text) {
+          blocks.push({ type: 'text', text });
+        }
       }
     }
     return blocks;
+  }
+
+  // Strip Codex tool output metadata prefix: "Chunk ID: ...\nWall time: ...\n..."
+  private cleanToolOutput(raw: string): string {
+    // Parse JSON wrapper if present (Codex wraps output in {"output":"...","metadata":{...}})
+    try {
+      const parsed = JSON.parse(raw) as { output?: string };
+      if (typeof parsed.output === 'string') {
+        return parsed.output;
+      }
+    } catch {}
+    // Strip plain-text metadata header lines added by Codex
+    return raw.replace(/^(Chunk ID:.*\n)?(Wall time:.*\n)?(Process exited.*\n)?(Original token count:.*\n)?(Output:\n)?/, '');
   }
 }
 
