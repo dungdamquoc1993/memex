@@ -1,6 +1,6 @@
 {
   "name": "@dungdq3/memex",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "CLI tool that aggregates AI chat history from multiple platforms into a searchable Markdown archive",
   "type": "module",
   "bin": {
@@ -8,7 +8,12 @@
   },
   "scripts": {
     "build": "bun build src/cli/main.ts --outdir dist --target bun",
-    "dev": "bun src/cli/main.ts"
+    "dev": "bun src/cli/main.ts",
+    "release": "npm publish",
+    "release:dry": "npm publish --dry-run",
+    "release:patch": "npm version patch && npm publish",
+    "release:minor": "npm version minor && npm publish",
+    "release:major": "npm version major && npm publish"
   },
   "keywords": [
     "ai",
