@@ -85,7 +85,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
   return false;
 }
 
-export async function syncScript(source: string | undefined, outputDir?: string): Promise<void> {
+export async function syncScript(source: string | undefined, outputDir?: string, opts?: { full?: boolean }): Promise<void> {
   source = source ? (SOURCE_ALIASES[source] || source) : source;
 
   if (!source || !SOURCE_MAP[source]) {
@@ -110,21 +110,23 @@ Options:
   // Read last sync timestamp and known IDs
   let sinceDate: string | null = null;
   let knownRawIds: string[] = [];
-  try {
-    const stats = getStats(stateSource);
-    if (stats.length > 0 && stats[0].last_sync) {
-      const raw = stats[0].last_sync;
-      sinceDate = raw.replace(' ', 'T') + 'Z';
+  if (!opts?.full) {
+    try {
+      const stats = getStats(stateSource);
+      if (stats.length > 0 && stats[0].last_sync) {
+        const raw = stats[0].last_sync;
+        sinceDate = raw.replace(' ', 'T') + 'Z';
+      }
+      if (ID_PREFIX[stateSource]) {
+        const prefix = ID_PREFIX[stateSource];
+        knownRawIds = getSyncedIds(stateSource)
+          .map(id => id.startsWith(prefix) ? id.slice(prefix.length) : id);
+      }
+    } catch {
+      // first-time sync
+    } finally {
+      closeDb();
     }
-    if (ID_PREFIX[stateSource]) {
-      const prefix = ID_PREFIX[stateSource];
-      knownRawIds = getSyncedIds(stateSource)
-        .map(id => id.startsWith(prefix) ? id.slice(prefix.length) : id);
-    }
-  } catch {
-    // first-time sync
-  } finally {
-    closeDb();
   }
 
   // Read browser script
@@ -174,7 +176,9 @@ Options:
 
   // Print instructions
   console.log('');
-  if (sinceDate) {
+  if (opts?.full) {
+    console.log('--full mode: script will fetch ALL conversations (ignoring sync history)');
+  } else if (sinceDate) {
     console.log(`Last sync: ${formatDate(sinceDate)} — script will fetch only new/updated conversations`);
   } else {
     console.log('No previous sync found — script will fetch all conversations');

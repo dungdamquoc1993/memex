@@ -1,5 +1,5 @@
-import { mkdir, writeFile, appendFile } from 'fs/promises';
-import { dirname } from 'path';
+import { mkdir, writeFile, appendFile, readFile } from 'fs/promises';
+import { dirname, relative } from 'path';
 import type { Adapter } from '../adapters/base.ts';
 import type { Conversation, Source } from '../normalize/schema.ts';
 import { ClaudeCodeAdapter } from '../adapters/claude_code.ts';
@@ -11,8 +11,9 @@ import { OpenClawAdapter } from '../adapters/openclaw.ts';
 import { GrokAdapter } from '../adapters/grok.ts';
 import { DeepSeekAdapter } from '../adapters/deepseek.ts';
 import { conversationToMarkdown } from '../normalize/markdown.ts';
-import { checkSync, recordSync, hashContent, closeDb } from '../profile/state.ts';
+import { checkSync, recordSync, hashContent, closeDb, upsertConversation, conversationCount, clearConversations, exportIndex } from '../profile/state.ts';
 import { paths } from '../profile/paths.ts';
+import { Glob } from 'bun';
 
 const ADAPTERS: Record<Source, () => Adapter> = {
   claude_code: () => new ClaudeCodeAdapter(),
@@ -25,8 +26,67 @@ const ADAPTERS: Record<Source, () => Adapter> = {
   deepseek: () => new DeepSeekAdapter(),
 };
 
-export async function sync(sourceArg?: string, dryRun = false) {
+function wordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+function parseFrontmatter(content: string): Record<string, string> {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return {};
+  const fm: Record<string, string> = {};
+  for (const line of match[1].split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx < 0) continue;
+    const key = line.slice(0, idx).trim();
+    let val = line.slice(idx + 1).trim();
+    // Strip surrounding quotes
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    fm[key] = val;
+  }
+  return fm;
+}
+
+async function rebuildIndex(): Promise<number> {
+  console.log('\nRebuilding index from existing files...');
+  clearConversations();
+  let count = 0;
+  const glob = new Glob('**/*.md');
+  for await (const file of glob.scan({ cwd: paths.memory, absolute: true })) {
+    // Skip raw/ and attachments/
+    const rel = relative(paths.workdir, file);
+    if (rel.startsWith('memory/raw/') || rel.startsWith('memory/attachments/')) continue;
+
+    try {
+      const content = await readFile(file, 'utf-8');
+      const fm = parseFrontmatter(content);
+      if (!fm.id || !fm.source) continue;
+
+      upsertConversation(
+        fm.id, fm.source, fm.title ?? '', fm.model === 'null' ? null : (fm.model ?? null),
+        fm.project === 'null' ? null : (fm.project ?? null),
+        fm.created_at ?? '', fm.updated_at ?? '',
+        parseInt(fm.message_count) || 0, wordCount(content),
+        fm.original_url === 'null' ? undefined : fm.original_url,
+        rel,
+      );
+      count++;
+    } catch {}
+  }
+  console.log(`  Indexed ${count} conversations`);
+  return count;
+}
+
+export async function sync(sourceArg?: string, dryRun = false, opts: { noIndex?: boolean; rebuildIndex?: boolean } = {}) {
   if (sourceArg === 'claude') sourceArg = 'claude_web';
+
+  const doIndex = !dryRun && !opts.noIndex;
+
+  // Rebuild index if requested or auto-bootstrap (empty conversations table)
+  if (doIndex && (opts.rebuildIndex || conversationCount() === 0)) {
+    await rebuildIndex();
+  }
 
   const sources: Source[] = sourceArg
     ? [sourceArg as Source]
@@ -78,6 +138,16 @@ export async function sync(sourceArg?: string, dryRun = false) {
         // Record in sync db
         recordSync(source, conv.id, hash);
 
+        // Index conversation
+        if (doIndex) {
+          const relPath = relative(paths.workdir, outPath);
+          upsertConversation(
+            conv.id, source, conv.title, conv.model, conv.project,
+            conv.created_at, conv.updated_at, conv.messages.length,
+            wordCount(md), conv.original_url, relPath,
+          );
+        }
+
         if (action === 'insert') {
           newCount++;
           console.log(`  + ${conv.title} (${conv.messages.length} msgs)`);
@@ -104,5 +174,12 @@ export async function sync(sourceArg?: string, dryRun = false) {
   }
 
   console.log(`\nTotal: ${totalNew} new, ${totalUpdated} updated, ${totalSkipped} skipped`);
+
+  // Export catalog.jsonl
+  if (doIndex) {
+    await exportIndex();
+    console.log(`Index exported to ${paths.index}`);
+  }
+
   closeDb();
 }

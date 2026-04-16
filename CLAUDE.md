@@ -25,7 +25,11 @@ bun link
 **CLI commands:**
 ```bash
 memex init [--workdir <path>]              # Initialize profile; persists workdir to config.json
-memex sync [source] [--dry-run]           # Sync one or all sources
+memex sync [source] [--dry-run] [--no-index] [--rebuild-index]
+                                          # Sync one or all sources; indexes by default
+                                          # --no-index: skip indexing; --rebuild-index: full rebuild from .md files
+memex search [--source X] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--model X] [--project X] [--search text] [--limit N] [--json]
+                                          # Query conversations from index
 memex status                              # Show stats from sync.db + disk usage
 memex sync-script <source> [path]         # Generate browser export snippet (injects SINCE_DATE)
 memex export [file]                       # Backup profile root + workdir to .tar.gz
@@ -119,6 +123,10 @@ CREATE TABLE sync_state (
 ```
 
 `state.checkSync(source, convId, hash)` returns `'skip'` | `'insert'` | `'update'`. Sync is idempotent — unchanged conversations are skipped by hash comparison.
+
+### Index & Catalog
+
+Sync also maintains a `conversations` table in `sync.db` (incremental upsert for each synced conversation) and exports `<workdir>/memory/catalog.jsonl` (one JSON object per line, all conversations). The catalog is regenerated at the end of every sync with indexing enabled. Auto-bootstrap: if the `conversations` table is empty, sync triggers a full rebuild from existing `.md` files.
 
 ### What qmd indexes vs. ignores
 

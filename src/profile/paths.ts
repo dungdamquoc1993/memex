@@ -59,6 +59,7 @@ function build(workdir: string) {
     wikiDomains: join(workdir, 'wiki', 'domains'),
     references: join(workdir, 'wiki', 'references'),
     scripts: join(workdir, 'scripts'),
+    index: join(workdir, 'memory', 'index.md'),
 
     memorySource(source: string) {
       return join(workdir, 'memory', source);

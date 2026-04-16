@@ -5,6 +5,7 @@ import { status } from './status.ts';
 import { syncScript } from './sync-script.ts';
 import { exportProfile, importProfile, verifyProfile } from './profile-archive.ts';
 import { configCommand } from './config.ts';
+import { search } from './search.ts';
 
 const argv = process.argv.slice(2);
 
@@ -36,15 +37,23 @@ async function main() {
     case 'sync': {
       const sourceArg = args.find(a => !a.startsWith('--'));
       const dryRun = args.includes('--dry-run');
-      await sync(sourceArg, dryRun);
+      const noIndex = args.includes('--no-index');
+      const rebuildIndex = args.includes('--rebuild-index');
+      await sync(sourceArg, dryRun, { noIndex, rebuildIndex });
       break;
     }
+    case 'search':
+      await search(args);
+      break;
     case 'status':
       await status();
       break;
-    case 'sync-script':
-      await syncScript(args[0], args[1]);
+    case 'sync-script': {
+      const full = args.includes('--full');
+      const scriptArgs = args.filter(a => a !== '--full');
+      await syncScript(scriptArgs[0], scriptArgs[1], { full });
       break;
+    }
     case 'export':
       await exportProfile(args[0]);
       break;
@@ -65,9 +74,17 @@ async function main() {
 
 Usage:
   memex init [--workdir <path>]       Create profile (state in ~/.memex, content in <workdir>)
-  memex sync [source] [--dry-run]     Sync chat history (chatgpt, claude, claude_code, gemini, codex, openclaw, grok, deepseek)
+  memex sync [source] [--dry-run] [--no-index] [--rebuild-index]
+                                      Sync chat history (chatgpt, claude, claude_code, gemini, codex, openclaw, grok, deepseek)
+                                      --no-index: skip indexing during sync
+                                      --rebuild-index: rebuild index from all existing .md files
+  memex search [--source X] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
+               [--model X] [--project X] [--search text] [--limit N] [--all] [--json]
+                                      Search conversations (default: 20 results, use --all for everything)
   memex status                        Show sync stats
-  memex sync-script <source> [path]   Save browser export script to file + copy to clipboard
+  memex sync-script <source> [path] [--full]
+                                      Save browser export script to file + copy to clipboard
+                                      --full: ignore sync history, fetch all conversations
   memex export [file]                 Backup profile + workdir to .tar.gz
   memex verify <file>                 Validate a profile backup without restoring
   memex import <file> [--replace] [--workdir <path>]
