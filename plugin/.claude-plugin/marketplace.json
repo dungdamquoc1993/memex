@@ -5,13 +5,13 @@
     "email": "dungdq3@gmail.com"
   },
   "metadata": {
-    "description": "Claude Code plugin bundled with the memex CLI — lets Claude Code drive sync, navigate the memory base, query via qmd, and produce a user-profile usable in agent harnesses like openclaw"
+    "description": "Claude Code plugin bundled with the memex CLI — drives sync, navigates the memory base, and produces a user-profile usable in agent harnesses like openclaw. Works with qmd (external) for semantic search when installed."
   },
   "plugins": [
     {
       "name": "memex",
       "source": "./",
-      "description": "Sync AI chat history, navigate memory, query via qmd, build user-profile",
+      "description": "Sync AI chat history, navigate memory, build user-profile",
       "version": "0.1.0",
       "author": {
         "name": "dungdamquoc",
@@ -19,9 +19,9 @@
       },
       "repository": "https://github.com/dungdamquoc1993/memex",
       "license": "MIT",
-      "keywords": ["memex", "memory", "qmd", "user-profile", "openclaw"],
+      "keywords": ["memex", "memory", "user-profile", "openclaw"],
       "category": "memory",
-      "tags": ["memex", "memory", "qmd", "profile", "openclaw"],
+      "tags": ["memex", "memory", "profile", "openclaw"],
       "strict": false
     }
   ]

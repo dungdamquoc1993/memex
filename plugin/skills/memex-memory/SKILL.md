@@ -1,6 +1,6 @@
 ---
 name: memex-memory
-description: Navigate the memex memory base to answer recall questions from the user's AI chat history. Covers directory layout, YAML frontmatter schema, catalog.jsonl, sync.db, what qmd indexes vs ignores, and how to pick the right tool (qmd vs `memex search` vs Grep vs Read). Load when the user asks to find/read/recall anything from past conversations — "what did I talk to AI about X", "tôi đã từng hỏi về X chưa", "find the conversation where I decided Y", "show my chats from last month about Z", or any question that requires retrieval from accumulated chat history. Pairs with the bundled `qmd` skill for semantic search — load both together when the question is fuzzy/semantic.
+description: Navigate the memex memory base to answer recall questions from the user's AI chat history. Covers directory layout, YAML frontmatter schema, catalog.jsonl, sync.db, and how to pick the right retrieval tool (`memex search`, Grep, optional external qmd). Load when the user asks to find/read/recall anything from past conversations — "what did I talk to AI about X", "tôi đã từng hỏi về X chưa", "find the conversation where I decided Y", "show my chats from last month about Z". For fuzzy/semantic recall questions, delegate to the `memex-memory-navigator` agent (it is self-sufficient and picks the best retrieval path).
 allowed-tools: Bash(memex:*), Bash(qmd:*), Bash(jq:*), Bash(wc:*), Bash(ls:*), Bash(du:*), Read, Grep, Glob
 ---
 
@@ -71,7 +71,7 @@ Message content...
 Response content...
 ```
 
-Section headings at each message boundary let qmd chunk at the right granularity.
+Section headings at each message boundary give downstream indexers (e.g. qmd) a clean chunk boundary.
 
 ### Sources
 
@@ -120,44 +120,36 @@ memex search --source chatgpt --since 2026-01-01 --search "sourdough" --limit 20
 
 | Question shape | Tool | Why |
 |---|---|---|
-| Semantic: "what have I discussed about X", "find conversations where I worried about Y" | `qmd` skill (query/vec/hyde) | Embedding search handles paraphrase |
-| Keyword/exact: "find 'npm ERR! ENOSPC' in any conversation" | `qmd` skill (lex) or `Grep` | BM25 / literal match is faster and more precise |
+| Fuzzy / semantic recall ("what have I discussed about X", "when I decided Y") | **Delegate to `memex-memory-navigator` agent** | Agent handles the full retrieval ladder (qmd MCP → qmd CLI → `memex search` → Grep) and cites evidence |
+| Exact string lookup ("find 'npm ERR! ENOSPC'") | `Grep` over `$WORKDIR/memory/` or `qmd search` if installed | BM25 / literal match is precise |
 | By metadata (source, date range, model, title substring) | `memex search --json` | Uses the conversations table; no text scan |
-| "Show conversation #abc123" | `qmd get "#abc123"` or Read the file | Direct fetch |
+| "Show conversation #abc123" | Read the `.md` file directly (resolve path via Glob) or `qmd get "#abc123"` if installed | Direct fetch |
 | Browse by time period | `<workdir>/memory/<source>/YYYY/MM/` via Glob | Path encodes the time axis |
 | Global stats (counts, last sync) | `memex status` | Reads sync.db |
 
-**Decision rule for Claude:** if the user asks a fuzzy semantic question, load the bundled `qmd` skill (see `skills/qmd/SKILL.md`) and use it. If they give exact strings or structured filters, prefer `memex search` or Grep. Never Read every `.md` file — the base can have thousands of files.
+**Important** — `memex search --search "X"` only matches `title` (case-insensitive substring on the conversations table). It does NOT scan message bodies. For content-level search, use Grep or qmd.
 
-### Using qmd (load the qmd skill)
+**Decision rule for Claude:** if the user asks a fuzzy semantic question, spawn the `memex-memory-navigator` agent — do not do semantic retrieval from this skill. If they give exact strings or structured filters, use `memex search` / Grep directly here. Never Read every `.md` file — the base can have thousands of files.
 
-When you need qmd, also load the bundled `qmd` skill — it covers install detection (`qmd status` or fallback to `npm install -g @tobilu/qmd`), MCP setup (preferred) vs CLI, the hybrid query format (`lex` / `vec` / `hyde` / `intent`), and all the commands (`query`, `search`, `vsearch`, `get`, `multi-get`). Treat the `qmd` skill as the source of truth for qmd usage; this skill just tells you *when* to reach for it.
+### External query engine: qmd (optional)
 
-**Preflight before first qmd use in a session:**
+[qmd](https://www.npmjs.com/package/@tobilu/qmd) is the recommended semantic search engine for this memory base, but it is **external** — not bundled with this plugin. If you need fuzzy recall and qmd is not installed, the `memex-memory-navigator` agent degrades gracefully to `memex search` + Grep. Offer install only if the user explicitly asks:
 
 ```bash
-command -v qmd || echo "qmd not installed — see skills/qmd for setup (npm install -g @tobilu/qmd)"
-qmd collection list 2>/dev/null | head -5  # confirm collections exist
+npm install -g @tobilu/qmd
+qmd collection add "$WORKDIR/memory" --name memex     # or per-source collections
+qmd embed
 ```
 
-If qmd is missing, tell the user and offer to install (CLI via `npm install -g @tobilu/qmd`, or MCP via the setup block in `skills/qmd/references/mcp-setup.md`). Fall back to `memex search` + Grep until qmd is available.
+Collection convention when registered (confirm via `qmd collection list` — do not assume): `{source}-{year}` (e.g., `chatgpt-2026`, `claude_code-2026`).
 
-**Typical memex collection convention** (confirm via `qmd collection list` — do not assume):
+## What gets indexed for search (qmd or otherwise)
 
-```
-chatgpt-YYYY, claude_code-YYYY, claude_web-YYYY, codex-YYYY,
-gemini-YYYY, grok-YYYY, deepseek-YYYY, openclaw-YYYY
-```
-
-One collection per source per year.
-
-## What qmd indexes vs ignores
-
-**Indexed** (`.md` files only):
+Only `.md` files under these paths are meaningful to search:
 - `<workdir>/memory/<source>/**/*.md`
 - `<workdir>/wiki/**/*.md`
 
-**Ignored:**
+Not indexed / skipped by convention:
 - `memory/raw/` (JSON exports)
 - `memory/attachments/` (binaries)
 - `wiki/references/` (raw refs)
@@ -169,9 +161,13 @@ If the user asks "why isn't X in search" — check if it lives under an ignored 
 
 ### Find a specific conversation you half-remember
 
-1. Try `qmd query "<fuzzy description>"` first
-2. If that misses, try `memex search --search "<keyword>" --json` with a title keyword
-3. Browse `<workdir>/memory/<source>/YYYY/MM/` if you know roughly when
+Spawn the `memex-memory-navigator` agent — it walks the full ladder (qmd MCP/CLI → `memex search` → Grep) and cites evidence. Don't try to reimplement that retrieval logic here.
+
+For very narrow lookups you can skip the agent:
+
+1. Title keyword: `memex search --search "<keyword>" --json`
+2. Time window browse: `ls "$WORKDIR/memory/<source>/YYYY/MM/"`
+3. Exact phrase in body: `Grep "<phrase>" -r "$WORKDIR/memory/" --glob "*.md"`
 
 ### Count conversations per source
 
@@ -194,7 +190,7 @@ jq -r 'select(.source=="chatgpt") | [.updated_at, .id, .title] | @tsv' "$WORKDIR
 
 ### Read a conversation
 
-Prefer `qmd get "#<id>"` over Read when the file is large — qmd will slice it. Otherwise just Read.
+Use Read on the resolved `.md` path. If the file is large and qmd is installed, `qmd get "#<id>"` will slice it for you.
 
 ## Guardrails
 

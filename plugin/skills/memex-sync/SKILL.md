@@ -130,7 +130,7 @@ Compare the "Last Sync" timestamps against expectations. Report to the user whic
 ~/.memex/logs/sync.log                       # appended
 ```
 
-If the user had qmd collections registered, sync writes new `.md` files but does **not** call `qmd update`. If they want search to see the new content, suggest running `qmd update` after sync (see `qmd-query` skill).
+If the user has qmd (external, optional) installed with memex collections registered, `memex sync` writes new `.md` files but does **not** call `qmd update` for them. Suggest running `qmd update` after sync if they want semantic search to see the new content.
 
 ## Error recovery
 
