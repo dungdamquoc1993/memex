@@ -8,7 +8,7 @@ Usage:
 Commands:
   init          Create profile (state in ~/.memex, content in <workdir>)
   sync          Sync chat history from a source (chatgpt, claude, claude_code, ...)
-  search        Search conversations from the index
+  search        List and search conversations
   status        Show sync stats and disk usage
   sync-script   Save browser export script to file + copy to clipboard
   export        Backup profile + workdir to .tar.gz
@@ -53,23 +53,25 @@ Options:
   --force             Re-process all conversations even if the source is unchanged
 `,
 
-  search: `memex search — Search conversations
+  search: `memex search — List and search conversations
 
 Usage:
-  memex search [--source X] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
+  memex search [--source X[,Y,...]] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
                [--model X] [--project X] [--search text]
                [--limit N] [--all] [--json]
 
 Options:
-  --source X          Filter by source (chatgpt, claude, ...)
+  --source X[,Y,...]  Filter by one or more sources; repeatable, accepts "claude" alias
   --since DATE        Only conversations on or after this date
   --until DATE        Only conversations on or before this date
   --model X           Filter by model name
   --project X         Filter by project name
-  --search TEXT       Full-text substring match
+  --search TEXT       Title substring match
   --limit N           Max results (default: 20)
   --all               Return all matches (overrides --limit)
   --json              Output as JSON instead of a table
+
+Results are sorted by most recent update first.
 `,
 
   status: `memex status — Show profile status

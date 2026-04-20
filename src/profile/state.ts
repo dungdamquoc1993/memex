@@ -109,6 +109,7 @@ export function upsertConversation(
 
 export interface QueryOpts {
   source?: string;
+  sources?: string[];
   since?: string;
   until?: string;
   model?: string;
@@ -122,7 +123,14 @@ export function queryConversations(opts: QueryOpts = {}): ConversationRow[] {
   const conditions: string[] = [];
   const params: unknown[] = [];
 
-  if (opts.source) { conditions.push('source = ?'); params.push(opts.source); }
+  if (opts.sources && opts.sources.length > 0) {
+    const placeholders = opts.sources.map(() => '?').join(', ');
+    conditions.push(`source IN (${placeholders})`);
+    params.push(...opts.sources);
+  } else if (opts.source) {
+    conditions.push('source = ?');
+    params.push(opts.source);
+  }
   if (opts.since) { conditions.push('created_at >= ?'); params.push(opts.since); }
   if (opts.until) { conditions.push('created_at <= ?'); params.push(opts.until); }
   if (opts.model) { conditions.push('model = ?'); params.push(opts.model); }
