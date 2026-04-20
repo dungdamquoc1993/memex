@@ -239,52 +239,56 @@
 
   // ========== CLAUDE API HELPERS ==========
   var cachedOrgId = null;
+  var cachedAllOrgs = null;
   var PAGE_LIMIT = 50;
 
-  async function getOrgId() {
-    if (cachedOrgId) return cachedOrgId;
-    log("Detecting organization...");
+  // Fetch all orgs from bootstrap (includes capabilities so we can filter).
+  // Returns array of {uuid, name} for orgs that have 'chat' capability.
+  async function getAllChatOrgs() {
+    if (cachedAllOrgs) return cachedAllOrgs;
+    log("Detecting organizations...");
 
-    // Try primary endpoint first, then bootstrap fallback
-    var endpoints = [
-      "https://claude.ai/api/organizations",
-      "https://claude.ai/api/bootstrap"
-    ];
+    var resp = await fetch("https://claude.ai/api/bootstrap", { credentials: "include" });
+    if (resp.status === 403) throw new Error("Access denied (403). Make sure you're logged in to claude.ai.");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
 
-    var lastErr = null;
-    for (var ei = 0; ei < endpoints.length; ei++) {
-      try {
-        var resp = await fetch(endpoints[ei], { credentials: "include" });
-        if (resp.status === 403) throw new Error("Access denied (403). Make sure you're logged in to claude.ai.");
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
+    var body = await resp.json();
+    var memberships = (body && body.account && body.account.memberships) || [];
+    if (memberships.length === 0) throw new Error("No organizations found in bootstrap response.");
 
-        var body = await resp.json();
-
-        // /api/organizations → returns array of orgs directly
-        // /api/bootstrap    → returns {account:{memberships:[{organization:{uuid,...}}]}}
-        var orgs = null;
-        if (Array.isArray(body)) {
-          orgs = body;
-        } else if (body && body.account && body.account.memberships) {
-          orgs = body.account.memberships.map(function(m) { return m.organization; });
-        } else if (body && body.organizations) {
-          orgs = body.organizations;
-        }
-
-        if (!orgs || orgs.length === 0) {
-          log("No orgs from " + endpoints[ei] + ", trying next...");
-          continue;
-        }
-
-        cachedOrgId = orgs[0].uuid || orgs[0].id;
-        log("Organization: " + (orgs[0].name || "Personal") + " (" + cachedOrgId + ")");
-        return cachedOrgId;
-      } catch(e) {
-        lastErr = e;
-        log("Endpoint " + endpoints[ei] + " failed: " + e.message);
+    var chatOrgs = [];
+    for (var i = 0; i < memberships.length; i++) {
+      var org = memberships[i].organization;
+      if (!org) continue;
+      var caps = org.capabilities || [];
+      if (caps.indexOf("chat") !== -1) {
+        chatOrgs.push({ uuid: org.uuid || org.id, name: org.name || "Personal" });
       }
     }
-    throw new Error("Could not detect org: " + (lastErr ? lastErr.message : "unknown"));
+
+    if (chatOrgs.length === 0) {
+      // Fallback: take all orgs without capability filter
+      for (var j = 0; j < memberships.length; j++) {
+        var o = memberships[j].organization;
+        if (o) chatOrgs.push({ uuid: o.uuid || o.id, name: o.name || "Personal" });
+      }
+    }
+
+    log("Found " + chatOrgs.length + " org(s) with chat access:");
+    for (var k = 0; k < chatOrgs.length; k++) {
+      log("  · " + chatOrgs[k].name + " (" + chatOrgs[k].uuid + ")");
+    }
+
+    cachedAllOrgs = chatOrgs;
+    return chatOrgs;
+  }
+
+  // Keep for backward compat (used by exportCurrentChat — just picks first chat org).
+  async function getOrgId() {
+    if (cachedOrgId) return cachedOrgId;
+    var orgs = await getAllChatOrgs();
+    cachedOrgId = orgs[0].uuid;
+    return cachedOrgId;
   }
 
   // Fetch conversations list with pagination
@@ -615,18 +619,42 @@
     progressEl.parentNode.insertBefore(scanHero, progressEl.nextSibling);
 
     try {
-      var orgId = await getOrgId();
+      var allOrgs = await getAllChatOrgs();
 
-      log("Scanning conversation list...");
-      scannedConvos = await fetchConversationsList(orgId);
+      scannedConvos = [];
+      var seenIds = {};
 
-      var countEl = document.getElementById("ce-scan-count");
-      if (countEl) countEl.textContent = scannedConvos.length.toLocaleString();
+      for (var oi = 0; oi < allOrgs.length; oi++) {
+        var org = allOrgs[oi];
+        var statusEl = document.getElementById("ce-scan-status");
+        if (statusEl) statusEl.innerHTML = '<span class="ce-scan-dots"><span></span><span></span><span></span></span> Scanning ' + org.name + '\u2026';
+        log("Scanning org: " + org.name + " (" + (oi + 1) + "/" + allOrgs.length + ")");
 
-      var statusEl = document.getElementById("ce-scan-status");
-      if (statusEl) statusEl.innerHTML = "Scan complete!";
+        var orgConvos = await fetchConversationsList(org.uuid);
 
-      log("Total conversations: " + scannedConvos.length);
+        // Tag each conversation with its org so download knows which endpoint to hit.
+        var added = 0;
+        for (var ci = 0; ci < orgConvos.length; ci++) {
+          var conv = orgConvos[ci];
+          var convId = conv.uuid || conv.id;
+          if (!seenIds[convId]) {
+            seenIds[convId] = true;
+            conv._org_id = org.uuid;
+            conv._org_name = org.name;
+            scannedConvos.push(conv);
+            added++;
+          }
+        }
+        log("Org " + org.name + ": " + added + " unique conversations");
+
+        var countEl = document.getElementById("ce-scan-count");
+        if (countEl) countEl.textContent = scannedConvos.length.toLocaleString();
+      }
+
+      var statusEl2 = document.getElementById("ce-scan-status");
+      if (statusEl2) statusEl2.innerHTML = "Scan complete!";
+
+      log("Total conversations across all orgs: " + scannedConvos.length);
 
       if (scannedConvos.length === 0) {
         setButtonState(btn, "done", "No conversations found");
@@ -637,7 +665,7 @@
       // Clean up scan UI and show download option
       setButtonState(btn, "done", scannedConvos.length + " conversations found");
       cleanupScanUI();
-      showDownloadPanel(orgId);
+      showDownloadPanel(allOrgs[0].uuid);
 
     } catch (err) {
       log("Scan failed: " + err.message, "error");
@@ -655,13 +683,18 @@
   }
 
   function showDownloadPanel(orgId) {
-    // Count models and sources
+    // Count models, orgs, and project sources
     var models = {};
+    var orgs = {};
     var sources = {};
     for (var i = 0; i < scannedConvos.length; i++) {
-      var m = scannedConvos[i].model || "unknown";
+      var c = scannedConvos[i];
+      var m = c.model || "unknown";
       models[m] = (models[m] || 0) + 1;
-      var src = scannedConvos[i]._project || "Main conversations";
+      var orgLabel = c._org_name || "Personal";
+      orgs[orgLabel] = (orgs[orgLabel] || 0) + 1;
+      // source = project name, or "org name / Main" to distinguish same-named projects across orgs
+      var src = c._project ? (c._org_name ? c._org_name + " / " + c._project : c._project) : (c._org_name || "Main conversations");
       sources[src] = (sources[src] || 0) + 1;
     }
     var modelKeys = Object.keys(models).sort(function(a, b) { return models[b] - models[a]; });
@@ -674,34 +707,45 @@
       modelCheckboxes += '<label class="ce-model-row"><input type="checkbox" checked data-model="' + mk + '"> ' + mk + '<span class="cnt">' + models[mk] + '</span></label>';
     }
 
+    // Build org filter checkboxes (shown when user has multiple orgs)
+    var orgKeys = Object.keys(orgs).sort(function(a, b) { return orgs[b] - orgs[a]; });
+    var hasMultiOrg = orgKeys.length > 1;
+    var orgCheckboxes = "";
+    for (var oi = 0; oi < orgKeys.length; oi++) {
+      var ok = orgKeys[oi];
+      orgCheckboxes += '<label class="ce-model-row"><input type="checkbox" checked data-org="' + ok + '"> \uD83C\uDFE2 ' + ok + '<span class="cnt">' + orgs[ok] + '</span></label>';
+    }
+
     // Build source/project checkboxes
-    var sourceKeys = Object.keys(sources).sort(function(a, b) {
-      if (a === "Main conversations") return -1;
-      if (b === "Main conversations") return 1;
-      return sources[b] - sources[a];
-    });
+    var sourceKeys = Object.keys(sources).sort(function(a, b) { return sources[b] - sources[a]; });
     var sourceCheckboxes = "";
-    var hasProjects = sourceKeys.length > 1;
+    var hasProjects = sourceKeys.length > orgKeys.length; // only show if there are actual projects beyond the org-level split
     for (var si = 0; si < sourceKeys.length; si++) {
       var sk = sourceKeys[si];
-      var icon = sk === "Main conversations" ? "\uD83D\uDCAC" : "\uD83D\uDCC1";
+      var isProject = sk.indexOf(" / ") !== -1;
+      var icon = isProject ? "\uD83D\uDCC1" : "\uD83D\uDCAC";
       sourceCheckboxes += '<label class="ce-model-row"><input type="checkbox" checked data-source="' + sk + '"> ' + icon + ' ' + sk + '<span class="cnt">' + sources[sk] + '</span></label>';
     }
 
     // Scan summary with breakdown
     var projConvoCount = scannedConvos.filter(function(c) { return c._project; }).length;
-    var projCount = 0;
-    for (var ski = 0; ski < sourceKeys.length; ski++) {
-      if (sourceKeys[ski] !== "Main conversations") projCount++;
-    }
     var mainCount = scannedConvos.length - projConvoCount;
     var scanSummaryText = scannedConvos.length.toLocaleString() + '</span>' +
       '<span style="font-size:12px;color:#888;"> conversations scanned</span>';
     var breakdownParts = [];
-    if (mainCount > 0) breakdownParts.push(mainCount.toLocaleString() + ' main');
-    if (projConvoCount > 0) breakdownParts.push(projConvoCount + ' from ' + projCount + ' project' + (projCount > 1 ? 's' : ''));
-    if (breakdownParts.length > 1) {
-      scanSummaryText += '<div style="font-size:11px;color:#7eb8a0;margin-top:4px;">' + breakdownParts.join(' + ') + '</div>';
+    if (hasMultiOrg) {
+      for (var boi = 0; boi < orgKeys.length; boi++) {
+        breakdownParts.push(orgs[orgKeys[boi]] + ' from ' + orgKeys[boi]);
+      }
+    } else {
+      if (mainCount > 0) breakdownParts.push(mainCount.toLocaleString() + ' main');
+      if (projConvoCount > 0) {
+        var projCount = sourceKeys.filter(function(s) { return s.indexOf(" / ") !== -1; }).length;
+        breakdownParts.push(projConvoCount + ' from ' + projCount + ' project' + (projCount > 1 ? 's' : ''));
+      }
+    }
+    if (breakdownParts.length > 0) {
+      scanSummaryText += '<div style="font-size:11px;color:#7eb8a0;margin-top:4px;">' + breakdownParts.join(' · ') + '</div>';
     }
 
     var filterHtml = '\
@@ -713,9 +757,14 @@
           <div class="ce-filter-label">Search conversations</div>\
           <input type="text" class="ce-filter-input" id="ce-search" placeholder="Filter by title\u2026" style="width:100%;">\
         </div>\
+        ' + (hasMultiOrg ? '\
+        <div class="ce-filter-section">\
+          <div class="ce-filter-label">Organization</div>\
+          <div class="ce-filter-models" id="ce-filter-orgs">' + orgCheckboxes + '</div>\
+        </div>' : '') + '\
         ' + (hasProjects ? '\
         <div class="ce-filter-section">\
-          <div class="ce-filter-label">Source</div>\
+          <div class="ce-filter-label">Source / Project</div>\
           <div class="ce-filter-models" id="ce-filter-sources">' + sourceCheckboxes + '</div>\
         </div>' : '') + '\
         ' + (hasRealModels ? '\
@@ -752,7 +801,7 @@
     var searchInput = document.getElementById("ce-search");
     if (searchInput) searchInput.addEventListener("input", updateFilterSummary);
 
-    var filterInputs = document.querySelectorAll("#ce-filter-models input, #ce-filter-sources input");
+    var filterInputs = document.querySelectorAll("#ce-filter-models input, #ce-filter-sources input, #ce-filter-orgs input");
     for (var fi = 0; fi < filterInputs.length; fi++) {
       filterInputs[fi].addEventListener("change", updateFilterSummary);
     }
@@ -779,6 +828,14 @@
     }
     var hasModelFilter = modelInputs.length > 0 && Object.keys(selectedModels).length > 0;
 
+    // Org filter
+    var selectedOrgs = {};
+    var orgBoxes = document.querySelectorAll("#ce-filter-orgs input");
+    for (var oi = 0; oi < orgBoxes.length; oi++) {
+      if (orgBoxes[oi].checked) selectedOrgs[orgBoxes[oi].getAttribute("data-org")] = true;
+    }
+    var hasOrgFilter = orgBoxes.length > 0 && Object.keys(selectedOrgs).length > 0;
+
     // Source/project filter
     var selectedSources = {};
     var sourceBoxes = document.querySelectorAll("#ce-filter-sources input");
@@ -797,8 +854,12 @@
         var title = (c.name || c.title || "").toLowerCase();
         if (title.indexOf(searchTerm) === -1) continue;
       }
+      if (hasOrgFilter) {
+        var orgLabel = c._org_name || "Personal";
+        if (!selectedOrgs[orgLabel]) continue;
+      }
       if (hasSourceFilter) {
-        var src = c._project || "Main conversations";
+        var src = c._project ? (c._org_name ? c._org_name + " / " + c._project : c._project) : (c._org_name || "Main conversations");
         if (!selectedSources[src]) continue;
       }
       if (hasModelFilter) {
@@ -892,7 +953,7 @@
         var title = convo.name || convo.title || "Untitled";
 
         try {
-          var detail = await fetchConversationDetail(orgId, convoId);
+          var detail = await fetchConversationDetail(convo._org_id || orgId, convoId);
           var processed = processConversation(detail, convo);
           result.conversations[i] = processed;
           success++;
