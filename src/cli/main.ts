@@ -1,4 +1,8 @@
 import { initPaths } from '../profile/paths.ts';
+import { parseGlobalFlags } from './args.ts';
+import { printMainHelp, printCommandHelp, printVersion } from './help.ts';
+import { maybeNotifyUpdate } from './update-check.ts';
+
 import { init } from './init.ts';
 import { sync } from './sync.ts';
 import { status } from './status.ts';
@@ -6,102 +10,86 @@ import { syncScript } from './sync-script.ts';
 import { exportProfile, importProfile, verifyProfile } from './profile-archive.ts';
 import { configCommand } from './config.ts';
 import { search } from './search.ts';
+import { doctor } from './doctor.ts';
 
-const argv = process.argv.slice(2);
+const flags = parseGlobalFlags(process.argv.slice(2));
 
-// Extract --workdir=<path> (also supports --workdir <path>) globally.
-let workdirFlag: string | undefined;
-const filtered: string[] = [];
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i];
-  if (a.startsWith('--workdir=')) {
-    workdirFlag = a.slice('--workdir='.length);
-  } else if (a === '--workdir') {
-    workdirFlag = argv[i + 1];
-    i++;
-  } else {
-    filtered.push(a);
-  }
+// Version short-circuits every other concern.
+if (flags.version) {
+  printVersion();
+  process.exit(0);
 }
 
-// Re-resolve paths now that we know the flag (env/config fallback handled inside).
-initPaths({ workdirFlag });
+initPaths({ workdirFlag: flags.workdirFlag });
 
-const [command, ...args] = filtered;
+const [command, ...args] = flags.rest;
+
+// "memex" and "memex --help" → main help (exit 0).
+// "memex <unknown>" → stderr + main help + exit 2.
+// "memex <cmd> --help" → per-command help.
+if (!command) {
+  printMainHelp();
+  process.exit(0);
+}
+
+if (flags.help) {
+  if (printCommandHelp(command)) process.exit(0);
+  printMainHelp();
+  process.exit(0);
+}
+
+type Handler = () => Promise<void> | void;
+
+const handlers: Record<string, Handler> = {
+  init: () => init({ workdirFlag: flags.workdirFlag }),
+  sync: () => {
+    const sourceArg = args.find(a => !a.startsWith('--'));
+    const dryRun = args.includes('--dry-run');
+    const noIndex = args.includes('--no-index');
+    const rebuildIndex = args.includes('--rebuild-index');
+    const force = args.includes('--force');
+    return sync(sourceArg, dryRun, { noIndex, rebuildIndex, force });
+  },
+  search: () => search(args),
+  status: () => status(),
+  'sync-script': () => {
+    const full = args.includes('--full');
+    const scriptArgs = args.filter(a => a !== '--full');
+    return syncScript(scriptArgs[0], scriptArgs[1], { full });
+  },
+  export: () => exportProfile(args[0]),
+  verify: () => verifyProfile(args[0]),
+  import: () => {
+    const archiveFile = args.find(a => !a.startsWith('--'));
+    const replace = args.includes('--replace');
+    return importProfile(archiveFile, replace, { workdirFlag: flags.workdirFlag });
+  },
+  config: () => configCommand(args),
+  doctor: () => doctor(),
+};
 
 async function main() {
-  switch (command) {
-    case 'init':
-      await init({ workdirFlag });
-      break;
-    case 'sync': {
-      const sourceArg = args.find(a => !a.startsWith('--'));
-      const dryRun = args.includes('--dry-run');
-      const noIndex = args.includes('--no-index');
-      const rebuildIndex = args.includes('--rebuild-index');
-      const force = args.includes('--force');
-      await sync(sourceArg, dryRun, { noIndex, rebuildIndex, force });
-      break;
-    }
-    case 'search':
-      await search(args);
-      break;
-    case 'status':
-      await status();
-      break;
-    case 'sync-script': {
-      const full = args.includes('--full');
-      const scriptArgs = args.filter(a => a !== '--full');
-      await syncScript(scriptArgs[0], scriptArgs[1], { full });
-      break;
-    }
-    case 'export':
-      await exportProfile(args[0]);
-      break;
-    case 'verify':
-      await verifyProfile(args[0]);
-      break;
-    case 'import': {
-      const archiveFile = args.find(a => !a.startsWith('--'));
-      const replace = args.includes('--replace');
-      await importProfile(archiveFile, replace, { workdirFlag });
-      break;
-    }
-    case 'config':
-      await configCommand(args);
-      break;
-    default:
-      console.log(`memex — personal memory base
+  const handler = handlers[command];
+  if (!handler) {
+    process.stderr.write(`memex: unknown command "${command}"\n\n`);
+    printMainHelp();
+    process.exit(2);
+  }
+  await handler();
 
-Usage:
-  memex init [--workdir <path>]       Create profile (state in ~/.memex, content in <workdir>)
-  memex sync [source] [--dry-run] [--no-index] [--rebuild-index] [--force]
-                                      Sync chat history (chatgpt, claude, claude_code, gemini, codex, openclaw, grok, deepseek)
-                                      --no-index: skip indexing during sync
-                                      --rebuild-index: rebuild index from all existing .md files
-                                      --force: re-process all conversations even if source is unchanged
-  memex search [--source X] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
-               [--model X] [--project X] [--search text] [--limit N] [--all] [--json]
-                                      Search conversations (default: 20 results, use --all for everything)
-  memex status                        Show sync stats
-  memex sync-script <source> [path] [--full]
-                                      Save browser export script to file + copy to clipboard
-                                      --full: ignore sync history, fetch all conversations
-  memex export [file]                 Backup profile + workdir to .tar.gz
-  memex verify <file>                 Validate a profile backup without restoring
-  memex import <file> [--replace] [--workdir <path>]
-                                      Restore a profile backup
-  memex config <get|set|list|path> [key] [value]
-                                      Manage ~/.memex/config.json (e.g. workdir)
-
-Global options:
-  --workdir <path>                    Override workdir for this invocation
-                                      (priority: flag > MEMEX_WORKDIR env > config.json > ~/.memex)
-`);
+  // Fire-and-forget update notifier; don't block exit on network.
+  // Doctor command does its own version check, so skip there.
+  if (command !== 'doctor') {
+    await maybeNotifyUpdate().catch(() => {});
   }
 }
 
 main().catch(e => {
-  console.error(e instanceof Error ? e.message : e);
+  if (flags.debug) {
+    console.error(e);
+  } else {
+    console.error(e instanceof Error ? e.message : String(e));
+    console.error('(run with --debug or MEMEX_DEBUG=1 for stack trace)');
+  }
   process.exit(1);
 });
