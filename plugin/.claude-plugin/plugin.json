@@ -16,6 +16,11 @@
     "user-profile",
     "openclaw"
   ],
-  "agents": ["./agents/"],
+  "agents": [
+    "./agents/memex-profile-builder.md",
+    "./agents/memex-memory-navigator.md",
+    "./agents/memex-extractor.md",
+    "./agents/memex-summarizer.md"
+  ],
   "skills": ["./skills/"]
 }
