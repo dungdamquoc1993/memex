@@ -1,6 +1,6 @@
 {
   "name": "@dungdq3/memex",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "CLI tool that aggregates AI chat history from multiple platforms into a searchable Markdown archive",
   "type": "module",
   "bin": {
