@@ -1,8 +1,10 @@
 # PIPELINE — memex-profile build architecture
 
-Canonical architecture + schema reference for the 3-layer profile pipeline. This document is the source of truth; if `SKILL.md` or any agent file disagrees, this file wins.
+Canonical architecture + schema reference for the 3-layer profile pipeline. This document is the source of truth; if `SKILL.md` or any helper agent file disagrees, this file wins.
 
-**No code in here.** Everything below is schema, algorithm, and contract. Actual execution happens in the agent system prompts (`plugin/agents/memex-*.md`) and the orchestration playbook (`SKILL.md`).
+**Host compatibility note**: this document is intentionally host-agnostic. The same artifacts can be produced by Claude Code using bundled helper agents, by Codex directly from `SKILL.md`, or by optional repo-local custom agents in `/.codex/agents/`. When sections below mention Claude Code or a named helper agent, read that as one possible executor, not a mandatory runtime dependency.
+
+**No code in here.** Everything below is schema, algorithm, and contract. Actual execution happens in the orchestration playbook (`SKILL.md`) plus any optional helper-agent instructions the host chooses to use.
 
 ## Design intent
 
@@ -12,13 +14,13 @@ Canonical architecture + schema reference for the 3-layer profile pipeline. This
 - **Delta-native**: after +N new conversations, pipeline re-summarizes N, re-extracts ~N/50 batches, re-runs aggregate, re-writes USER.md. Not 3000 again.
 - **Resumable under rate limit**: file-based checkpoints at every layer. If Layer 1 stops at 1000/3193, the next run resumes at 1001.
 - **No qmd in this pipeline.** qmd stays for general memex search; profile build has its own exhaustive, deterministic path.
-- **Pure-agent topology.** No CLI changes to memex. No Anthropic SDK installs. Claude Code orchestrates, three specialized agents do the LLM work, a deterministic inline rollup glues Layer 2 → Layer 3.
+- **Host-agent topology.** No CLI changes to memex. No required Anthropic or OpenAI SDK installs for the pipeline itself. The host agent may execute phases directly or delegate them to optional helpers; a deterministic inline rollup glues Layer 2 → Layer 3.
 
 ## Architecture overview
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│  Claude Code (main) — orchestrator                             │
+│  Host agent (Codex or Claude Code) — orchestrator              │
 │                                                                │
 │  Reads SKILL.md. Decides mode (full/delta/skip/resume).        │
 │  Plans batches. Spawns agents. Verifies checkpoints.           │
@@ -59,7 +61,7 @@ summaries/  extracts/      aggregate.json   USER.md
 **Batch size**: 30 conversations per agent invocation. 3000 convos → ~100 spawns.
 **Where outputs land**: `<workdir>/memory/summaries/<source>/<year>/<month>/<id>.json` (sibling to the raw `.md`).
 
-**Input to the agent** (passed by Claude Code as the user message):
+**Input to the agent** (passed by the host orchestrator as the user message):
 
 ```json
 {
@@ -114,7 +116,7 @@ summaries/  extracts/      aggregate.json   USER.md
 | `emotional_tenor` | `neutral` \| `frustrated` \| `excited` \| `confused` |
 | `key_entities` | 3-10 noun phrases (topics, tools, projects). NOT sentences. |
 
-**Agent return value** (for Claude Code):
+**Agent return value** (for the host orchestrator):
 
 ```json
 {
@@ -135,7 +137,7 @@ If `rate_limited: true`, the agent stopped mid-batch; the remaining items in its
 **Batch size**: 50 summaries per agent invocation → 1 batch-extract JSON. 3000 summaries → ~60 spawns.
 **Where outputs land**: `<workdir>/profile/extracts/batch-NNNN.json`.
 
-**Batching rule** (Claude Code decides, then hands the agent its batch):
+**Batching rule** (the host orchestrator decides, then hands the agent its batch):
 
 - Enumerate all Layer 1 summaries in the configured `time_window` (default last 12 months).
 - Sort by `(created_at ASC, id)` for determinism.
@@ -262,7 +264,7 @@ Full metadata travels with every signal. Layer 2.5 needs all of it to compute ag
 
 ## Layer 2.5 — Deterministic rollup (inline, no LLM)
 
-**Who runs it**: Claude Code directly, via `jq` and bash commands inline. No agent. No script file (yet).
+**Who runs it**: the host orchestrator directly, via `jq` and bash commands inline. No helper is required. No script file (yet).
 
 **Input**: all `profile/extracts/batch-*.json` files.
 **Output**: `<workdir>/profile/aggregate.json` + `<workdir>/profile/logs/aggregate-YYYYMMDD-HHMMSS.log` (dedupe merge log).
@@ -302,7 +304,7 @@ Full metadata travels with every signal. Layer 2.5 needs all of it to compute ag
 
 ### Synonym table (v1, inline; grows over time)
 
-Maintained as an inline YAML block that Claude Code loads before rollup. v1 is minimal; new entries get added as false-merges surface in aggregate logs.
+Maintained as an inline YAML block that the host orchestrator loads before rollup. v1 is minimal; new entries get added as false-merges surface in aggregate logs.
 
 ```yaml
 # Canonical key → list of variants that collapse to it
@@ -382,7 +384,7 @@ v1 dedupe is **synonym-table + exact-match only**. Fuzzy Levenshtein is deferred
 **Invocations**: exactly 1 per build.
 **Output**: `<workdir>/profile/USER.md` + `<workdir>/profile/state.json` + `<workdir>/profile/logs/build-YYYYMMDD-HHMMSS.md`.
 
-**Input to the agent** (passed by Claude Code):
+**Input to the agent** (passed by the host orchestrator):
 
 ```json
 {
@@ -402,7 +404,7 @@ v1 dedupe is **synonym-table + exact-match only**. Fuzzy Levenshtein is deferred
 }
 ```
 
-In delta mode, `wiki_files` contains only files whose digest changed since last build. Full mode passes all wiki content (bounded to ~30KB by Claude Code; truncate largest files if overflow).
+In delta mode, `wiki_files` contains only files whose digest changed since last build. Full mode passes all wiki content (bounded to a reasonable prompt budget; truncate largest files if overflow).
 
 ### Agent responsibilities
 
@@ -576,18 +578,18 @@ Logs accumulate — never auto-prune. They're the only explanation of *why* a gi
 ### Rate-limit flow
 
 1. Agent detects rate limit from its LLM call (e.g., 429 or SDK error).
-2. Agent returns `{"rate_limited": true, "processed": N, ...}` to Claude Code.
-3. Claude Code writes a `RESUMABLE_STOP` entry to `profile/logs/pipeline-*.log.jsonl`, tells user:
+2. Agent returns `{"rate_limited": true, "processed": N, ...}` to the host orchestrator.
+3. The host orchestrator writes a `RESUMABLE_STOP` entry to `profile/logs/pipeline-*.log.jsonl`, tells the user:
 
-   > "Pipeline paused at Layer 1, ~1847/3193 conversations summarized. Run `/memex-profile resume` in a few minutes when rate limits reset."
+   > "Pipeline paused at Layer 1, ~1847/3193 conversations summarized. Resume later from the saved checkpoints."
 
-4. Claude Code does NOT update `state.json` on paused runs — state.json only updates after Layer 3 succeeds.
+4. The host orchestrator does NOT update `state.json` on paused runs — state.json only updates after Layer 3 succeeds.
 
 ### Quota / billing flow
 
 Similar, but message is:
 
-> "Pipeline paused: Anthropic quota exhausted. Resume with `/memex-profile resume` once billing restores."
+> "Pipeline paused: model quota exhausted. Resume once billing or rate limits restore."
 
 ### Per-unit errors (non-rate-limit)
 
@@ -641,7 +643,7 @@ Tail-readable; survives process death. Resume logic scans for the most recent `R
 
 Given `N` new conversations since last build:
 
-1. Claude Code detects them via `state.json.sources.memory.max_created_at` vs current `catalog.jsonl` max.
+1. The host orchestrator detects them via `state.json.sources.memory.max_created_at` vs current `catalog.jsonl` max.
 2. **Layer 1**: `N` convs need summaries. `ceil(N / 30)` summarizer-agent spawns. Existing summaries skip via content-hash check. Cost: ~$0.001 × N.
 3. **Layer 2**: new summaries land in trailing batches. 1-3 batches re-extracted; all prior batches cached. Cost: ~$0.02-0.06.
 4. **Layer 2.5**: always rerun. Reads all extracts, rebuilds aggregate.json. No LLM cost.
@@ -652,9 +654,9 @@ Total delta cost: **~$0.55 + $0.001 × N**. Total delta time: **~30-90 seconds f
 
 ## Plugin distribution note
 
-Claude Code plugins are directory-based. When a user installs this plugin, the entire `plugin/` folder copies to their local plugins directory. That means sibling files to `SKILL.md` (this `PIPELINE.md`, any future `scripts/`) travel with it — they're just not auto-loaded as skills. SKILL.md references them by relative path and `Read`s them lazily when needed.
+Plugin installs are directory-based. When a user installs this plugin, the entire `plugin/` folder copies to the local plugin store. That means sibling files to `SKILL.md` (this `PIPELINE.md`, any future `scripts/`) travel with it — they're just not auto-loaded as skills. `SKILL.md` references them by relative path and reads them lazily when needed.
 
-**Verify**: after plugin installation, confirm `<plugins-dir>/memex/plugin/skills/memex-profile/PIPELINE.md` exists and is readable by the skill runtime. Flagged as an open verification item.
+**Verify**: after plugin installation, confirm the installed plugin copy still contains `skills/memex-profile/PIPELINE.md` and that the skill runtime can read it. Flagged as an open verification item.
 
 ## Scope boundaries
 

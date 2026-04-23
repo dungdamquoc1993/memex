@@ -1,0 +1,41 @@
+{
+  "name": "memex",
+  "version": "0.5.6",
+  "description": "Codex plugin for memex — sync AI chat history, navigate the memory base, and build a user profile from accumulated memory",
+  "author": {
+    "name": "dungdamquoc",
+    "email": "dungdq3@gmail.com",
+    "url": "https://github.com/dungdamquoc1993"
+  },
+  "homepage": "https://github.com/dungdamquoc1993/memex/tree/main/plugin",
+  "repository": "https://github.com/dungdamquoc1993/memex",
+  "license": "MIT",
+  "keywords": [
+    "memex",
+    "memory",
+    "personal-data",
+    "user-profile",
+    "codex",
+    "openclaw"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "memex",
+    "shortDescription": "Sync chats, search memory, build profiles",
+    "longDescription": "Reusable Codex skills for memex sync, memory recall, and USER.md profile generation from archived AI conversations.",
+    "developerName": "dungdamquoc",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "websiteURL": "https://github.com/dungdamquoc1993/memex",
+    "defaultPrompt": [
+      "Sync my Codex and Claude Code chats into memex.",
+      "Find the conversation where I decided a technical approach.",
+      "Build a USER.md profile from everything in memex."
+    ],
+    "brandColor": "#2F6FED"
+  }
+}

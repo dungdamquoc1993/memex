@@ -1,5 +1,7 @@
 import { queryConversations, closeDb } from '../profile/state.ts';
 import type { QueryOpts } from '../profile/state.ts';
+import { paths } from '../profile/paths.ts';
+import { isAbsolute, join } from 'path';
 
 function parseFlag(args: string[], flag: string): string | undefined {
   for (let i = 0; i < args.length; i++) {
@@ -48,6 +50,10 @@ function parseSources(args: string[]): string[] {
   )];
 }
 
+function displayFilePath(filePath: string): string {
+  return isAbsolute(filePath) ? filePath : join(paths.workdir, filePath);
+}
+
 export async function search(args: string[]) {
   const opts: QueryOpts = {};
   const sources = parseSources(args);
@@ -74,11 +80,16 @@ export async function search(args: string[]) {
     if (rows.length === 0) {
       console.log('No conversations found.');
     } else {
+      const detailIndent = ' '.repeat(25);
       for (const r of rows) {
         const date = r.updated_at.slice(0, 10);
         const src = r.source.padEnd(12);
         const title = r.title.length > 60 ? r.title.slice(0, 57) + '...' : r.title;
         console.log(`${date}  ${src} ${title}  (${r.message_count} msgs)`);
+        console.log(`${detailIndent}file: ${displayFilePath(r.file_path)}`);
+        if (r.original_url) {
+          console.log(`${detailIndent}url:  ${r.original_url}`);
+        }
       }
       const limitNote = !allResults && !limitStr && rows.length === 20 ? '  (use --all or --limit N for more)' : '';
       console.log(`\n${rows.length} conversations found${limitNote}`);

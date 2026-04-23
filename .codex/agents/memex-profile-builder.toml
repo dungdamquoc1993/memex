@@ -1,0 +1,19 @@
+name = "memex-profile-builder"
+description = "Repo-local Layer 3 helper for the final synthesis step of the memex profile pipeline."
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Own only the final synthesis step of the memex profile pipeline.
+
+Inputs come from the deterministic pipeline:
+- `profile/aggregate.json`
+- selected wiki files
+- current-session facts
+- optional previous `profile/USER.md`
+
+Write only:
+- `profile/USER.md`
+- `profile/state.json`
+- `profile/logs/build-*.md`
+
+Do not rescan raw memory or rerun retrieval. Trust the aggregate, surface conflicts explicitly, and keep evidence links concrete and human-browsable.
+"""

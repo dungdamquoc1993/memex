@@ -1,12 +1,12 @@
 ---
 name: memex-sync
-description: Drive the memex CLI to scrape and sync AI chat history into the memory base, and walk the user through the manual steps only they can do (paste browser snippet + click download). Load when the user wants to pull/refresh/update chat history from any AI platform — ChatGPT, Claude.ai, Gemini, Grok, DeepSeek (browser-assisted) or Claude Code / Codex / OpenClaw (fully automatic). Trigger phrases include "sync memex", "update memory", "pull my chats", "scrape chatgpt/claude/gemini/grok/deepseek", "đồng bộ memex", "cập nhật chat history", "lấy chat từ X", or any mention of `memex sync` / `memex sync-script`. Also activate proactively before answering any recall/profile question when `memex status` shows the relevant source is stale (>24h).
+description: Drive the memex CLI to scrape and sync AI chat history into the memory base, and walk the user through the manual steps only they can do (paste browser snippet + click download). Load when the user wants to pull or refresh chat history from any AI platform — ChatGPT, Claude.ai, Gemini, Grok, DeepSeek (browser-assisted) or Claude Code, Codex, OpenClaw (fully automatic). Trigger phrases include "sync memex", "update memory", "pull my chats", "scrape chatgpt/claude/gemini/grok/deepseek", "đồng bộ memex", "cập nhật chat history", "lấy chat từ X", or any mention of `memex sync` / `memex sync-script`. Also activate proactively before answering any recall or profile question when `memex status` shows the relevant source is stale (>24h).
 allowed-tools: Bash(memex:*), Bash(qmd:*), Bash(mv:*), Bash(ls:*), Bash(command:*)
 ---
 
 # memex-sync
 
-Drive the `memex` CLI to keep the user's memory base fresh. The user owns two manual steps you cannot do: (1) pasting browser snippets into DevTools, and (2) clicking the browser download that the snippet produces. Everything else you can orchestrate.
+Drive the `memex` CLI to keep the user's memory base fresh from either Codex or Claude Code. The user owns two manual steps you cannot do: (1) pasting browser snippets into DevTools, and (2) clicking the browser download that the snippet produces. Everything else you can orchestrate.
 
 ## Interactive flow (read this first)
 

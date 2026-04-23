@@ -1,49 +1,51 @@
 ---
 name: memex-memory
-description: Navigate the memex memory base to answer recall questions from the user's AI chat history. Covers directory layout, YAML frontmatter schema, catalog.jsonl, sync.db, and how to pick the right retrieval tool (`memex search`, Grep, optional external qmd). Load when the user asks to find/read/recall anything from past conversations — "what did I talk to AI about X", "tôi đã từng hỏi về X chưa", "find the conversation where I decided Y", "show my chats from last month about Z". For fuzzy/semantic recall questions, delegate to the `memex-memory-navigator` agent (it is self-sufficient and picks the best retrieval path).
+description: Navigate the memex memory base to answer recall questions from the user's AI chat history. Covers directory layout, YAML frontmatter schema, catalog.jsonl, sync.db, and how to pick the right retrieval ladder (`memex search`, targeted Grep, optional external qmd). Load when the user asks to find, read, or recall anything from past conversations — "what did I talk to AI about X", "tôi đã từng hỏi về X chưa", "find the conversation where I decided Y", "show my chats from last month about Z".
 allowed-tools: Bash(memex:*), Bash(qmd:*), Bash(jq:*), Bash(wc:*), Bash(ls:*), Bash(du:*), Read, Grep, Glob
 ---
 
 # memex-memory
 
-Understand and navigate the `<workdir>/` tree so you can answer "what did I talk to AI about X" questions without wasting tokens.
+Understand and navigate the `<workdir>/` tree so you can answer recall questions without wasting tokens. This skill must work on its own in Codex or Claude Code. When a repo-local `memex-memory-navigator` agent exists, prefer delegating fuzzy recall to it; otherwise execute the same retrieval ladder directly here.
 
-## Resolving the workdir
+## Resolve the workdir first
 
-**Always** resolve first — it is configurable:
+Always resolve before doing file work:
 
 ```bash
 WORKDIR="$(memex config get workdir)"
 ```
 
-Priority chain (memex respects this internally): `--workdir` CLI flag → `MEMEX_WORKDIR` env → `workdir` in `~/.memex/config.json` → default `~/.memex`.
+Priority chain: `--workdir` CLI flag → `MEMEX_WORKDIR` env → `workdir` in `~/.memex/config.json` → default `~/.memex`.
 
 ## Directory layout
 
-```
+```text
 <workdir>/
-├── memory/                             # written by memex, do not edit
-│   ├── <source>/YYYY/MM/<id>.md        # one file per conversation
-│   ├── raw/<source>/                   # original JSON exports (NOT indexed)
-│   ├── attachments/                    # binaries (NOT indexed)
-│   ├── catalog.jsonl                   # one JSON object per line, all convs
-│   └── index.md                        # human-readable catalog grouped by source+month
-├── wiki/                               # editable by user and agent
-│   ├── domains/                        # knowledge notes
-│   ├── references/                     # raw refs (NOT indexed)
-│   ├── profile.md                      # LLM-compiled personal context
-│   └── index.md                        # wiki catalog
-└── scripts/                            # generated browser export snippets
+├── memory/
+│   ├── <source>/YYYY/MM/<id>.md
+│   ├── raw/<source>/
+│   ├── attachments/
+│   ├── catalog.jsonl
+│   └── index.md
+├── wiki/
+│   ├── domains/
+│   ├── references/
+│   ├── profile.md
+│   └── index.md
+└── scripts/
 
-~/.memex/                               # profile root — fixed, do not edit
-├── state/sync.db                       # SQLite; conversations + sync_state tables
+~/.memex/
+├── state/sync.db
 ├── logs/sync.log
-└── config.json                         # workdir pointer
+└── config.json
 ```
 
-## Conversation file schema
+`memory/` is effectively immutable output from memex. `wiki/` is the editable zone. Never write into `memory/` manually.
 
-Every conversation `.md` has YAML frontmatter, then `## [timestamp] role` section headings per message:
+## Conversation file shape
+
+Every conversation Markdown file has YAML frontmatter plus timestamped message sections:
 
 ```markdown
 ---
@@ -63,111 +65,91 @@ original_url: "https://chatgpt.com/c/abc123"
 Message content...
 
 ## [2026-04-10 03:15:42] assistant (gpt-4o)
-
-### Thinking
-(reasoning if present)
-
-### Response
-Response content...
 ```
 
-Section headings at each message boundary give downstream indexers (e.g. qmd) a clean chunk boundary.
+Sources: `chatgpt`, `claude_web` (alias `claude`), `gemini`, `claude_code`, `codex`, `openclaw`, `grok`, `deepseek`.
 
-### Sources
-
-`chatgpt`, `claude_web` (alias `claude`), `gemini`, `claude_code`, `codex`, `openclaw`, `grok`, `deepseek`.
-
-### IDs
-
-Format: `<source>_<platform_id>`. The platform id is the provider's original conversation id. Referencing conversations: `#<id>` (qmd supports `qmd get "#<id>"`).
-
-## Index files you can use
+## Indexes you should use before reading raw files
 
 ### `<workdir>/memory/catalog.jsonl`
 
-One JSON object per line, regenerated at end of every sync with indexing enabled. Good for quick filtering without reading every `.md` file. May not exist if the user hasn't synced with indexing yet — check before relying on it.
+Fast metadata scan. Good for source, date, model, title, and count filtering.
 
 ```bash
-# Example: last 20 chatgpt conversations about "sourdough"
 jq 'select(.source=="chatgpt" and (.title | test("sourdough"; "i")))' "$WORKDIR/memory/catalog.jsonl" | head -40
 ```
 
-### `<workdir>/memory/index.md`
+### `memex search --json`
 
-Human-readable table of contents grouped by `source/YYYY/MM`. Good for showing the user a browsable overview.
-
-### `~/.memex/state/sync.db`
-
-SQLite with two tables:
-
-```sql
-CREATE TABLE sync_state (
-  source TEXT, conversation_id TEXT, content_hash TEXT, last_synced_at TEXT,
-  PRIMARY KEY (source, conversation_id)
-);
-CREATE TABLE conversations (  -- incremental upsert during sync
-  -- id, source, title, model, created_at, updated_at, message_count, etc.
-);
-```
-
-Use `memex search` rather than raw sqlite when you can — it handles the query shape and JSON output:
+Prefer this for structured filters:
 
 ```bash
 memex search --source chatgpt --since 2026-01-01 --search "sourdough" --limit 20 --json
 ```
 
-## Choosing the right query tool
+Important: `memex search --search` matches **title substring only**. It does not scan message bodies.
 
-| Question shape | Tool | Why |
+### `~/.memex/state/sync.db`
+
+Useful for debugging sync state, but use `memex search` or `memex status` before touching SQLite directly.
+
+## Retrieval ladder
+
+Choose the cheapest path that can still answer the question.
+
+| Question shape | Primary tool | Why |
 |---|---|---|
-| Fuzzy / semantic recall ("what have I discussed about X", "when I decided Y") | **Delegate to `memex-memory-navigator` agent** | Agent handles the full retrieval ladder (qmd MCP → qmd CLI → `memex search` → Grep) and cites evidence |
-| Exact string lookup ("find 'npm ERR! ENOSPC'") | `Grep` over `$WORKDIR/memory/` or `qmd search` if installed | BM25 / literal match is precise |
-| By metadata (source, date range, model, title substring) | `memex search --json` | Uses the conversations table; no text scan |
-| "Show conversation #abc123" | Read the `.md` file directly (resolve path via Glob) or `qmd get "#abc123"` if installed | Direct fetch |
-| Browse by time period | `<workdir>/memory/<source>/YYYY/MM/` via Glob | Path encodes the time axis |
-| Global stats (counts, last sync) | `memex status` | Reads sync.db |
+| Source/date/model/title filters | `memex search --json` | Uses indexed metadata; no body scan |
+| Exact phrase or error string | `Grep` or `rg` over `$WORKDIR/memory/**/*.md` | Literal body match |
+| "Show conversation #id" | `Glob` + `Read` | Direct fetch |
+| Browsing a month or source | `Glob` / `ls` on `memory/<source>/YYYY/MM/` | Path already encodes time |
+| Fuzzy or semantic recall | qmd if installed; otherwise layered fallback below | Best recall with bounded cost |
 
-**Important** — `memex search --search "X"` only matches `title` (case-insensitive substring on the conversations table). It does NOT scan message bodies. For content-level search, use Grep or qmd.
+## How to handle fuzzy recall without helper agents
 
-**Decision rule for Claude:** if the user asks a fuzzy semantic question, spawn the `memex-memory-navigator` agent — do not do semantic retrieval from this skill. If they give exact strings or structured filters, use `memex search` / Grep directly here. Never Read every `.md` file — the base can have thousands of files.
+Preferred path when available:
 
-### External query engine: qmd (optional)
+1. If the host can spawn `memex-memory-navigator`, delegate the fuzzy recall question to it with the current constraints and expected citation style.
+2. If that helper is unavailable, do the retrieval directly in this skill using the ladder below.
 
-[qmd](https://www.npmjs.com/package/@tobilu/qmd) is the recommended semantic search engine for this memory base, but it is **external** — not bundled with this plugin. If you need fuzzy recall and qmd is not installed, the `memex-memory-navigator` agent degrades gracefully to `memex search` + Grep. Offer install only if the user explicitly asks:
+Do the retrieval directly in this skill:
+
+1. Resolve likely scope first.
+   - If the user names a source, date range, model, or project, narrow with `memex search --json`.
+   - If they provide a distinctive noun phrase, check titles first with `memex search --search`.
+2. If qmd is installed and collections are ready, use it.
+   - Confirm with `command -v qmd`.
+   - Use `qmd collection list` only if you need to verify the memex collection exists.
+   - Prefer `qmd query` or `qmd search` over broad Markdown reads.
+3. If qmd is absent, combine metadata narrowing with targeted Grep.
+   - Filter likely conversations or months from `catalog.jsonl`.
+   - Grep only likely source/date slices instead of the whole archive when possible.
+4. Read only the top candidate conversations you need to answer.
+5. Cite the exact conversation ids, dates, and file paths you used.
+
+Do not block on helper availability. The skill itself owns the retrieval ladder and must be able to complete the task directly.
+
+## External query engine: qmd
+
+[qmd](https://www.npmjs.com/package/@tobilu/qmd) is the recommended semantic search engine for this memory base, but it is external. If it is not already installed, degrade to `memex search` + targeted Grep. Offer installation help only if the user explicitly asks.
+
+Typical commands:
 
 ```bash
-npm install -g @tobilu/qmd
-qmd collection add "$WORKDIR/memory" --name memex     # or per-source collections
-qmd embed
+qmd collection list
+qmd query "<question>"
+qmd search "<phrase>"
+qmd get "#<id>"
 ```
 
-Collection convention when registered (confirm via `qmd collection list` — do not assume): `{source}-{year}` (e.g., `chatgpt-2026`, `claude_code-2026`).
+## Common tasks
 
-## What gets indexed for search (qmd or otherwise)
+### Find a half-remembered conversation
 
-Only `.md` files under these paths are meaningful to search:
-- `<workdir>/memory/<source>/**/*.md`
-- `<workdir>/wiki/**/*.md`
-
-Not indexed / skipped by convention:
-- `memory/raw/` (JSON exports)
-- `memory/attachments/` (binaries)
-- `wiki/references/` (raw refs)
-- `~/.memex/` entirely (profile root)
-
-If the user asks "why isn't X in search" — check if it lives under an ignored path.
-
-## Common memory tasks
-
-### Find a specific conversation you half-remember
-
-Spawn the `memex-memory-navigator` agent — it walks the full ladder (qmd MCP/CLI → `memex search` → Grep) and cites evidence. Don't try to reimplement that retrieval logic here.
-
-For very narrow lookups you can skip the agent:
-
-1. Title keyword: `memex search --search "<keyword>" --json`
-2. Time window browse: `ls "$WORKDIR/memory/<source>/YYYY/MM/"`
-3. Exact phrase in body: `Grep "<phrase>" -r "$WORKDIR/memory/" --glob "*.md"`
+1. Try `memex search --json` with any source/date/title hints.
+2. If the question is semantic, try qmd if available.
+3. Fall back to `Grep` for exact phrases or identifiers.
+4. Read only final candidates and summarize with evidence.
 
 ### Count conversations per source
 
@@ -181,20 +163,20 @@ memex status
 ls -t "$WORKDIR/memory/chatgpt/2026/04/" | head -10
 ```
 
-Or via catalog:
+Or:
 
 ```bash
 jq -r 'select(.source=="chatgpt") | [.updated_at, .id, .title] | @tsv' "$WORKDIR/memory/catalog.jsonl" \
   | sort -r | head -20
 ```
 
-### Read a conversation
+### Read a specific conversation
 
-Use Read on the resolved `.md` path. If the file is large and qmd is installed, `qmd get "#<id>"` will slice it for you.
+Resolve the `.md` path via `Glob`, then `Read` it. If qmd is installed and the user gives an id, `qmd get "#<id>"` can be cheaper.
 
 ## Guardrails
 
-- `memory/` is immutable to memex's convention. Do not write to it manually.
-- `memory/raw/` is append-only; do not edit or delete unless debugging.
-- `state/` is internal. Do not touch `sync.db` directly unless the user explicitly asks.
-- `wiki/` is the user/agent-editable zone — put compiled artifacts like `profile.md`, `USER.md`, domain notes here.
+- Never scan every conversation file unless the archive is tiny and the user explicitly wants exhaustive reading.
+- Never write to `memory/`, `memory/raw/`, or `~/.memex/state/`.
+- Prefer catalog, status, and targeted filters before body-level search.
+- When confidence is low, say so and show the best evidence you found.

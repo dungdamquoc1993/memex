@@ -1,373 +1,246 @@
 ---
 name: memex-profile
-description: Build or refresh the user's USER.md profile from memex data via a 3-layer agent pipeline orchestrated by Claude Code. Layer 1 summarizes each conversation (memex-summarizer agent, haiku-class, batch 30). Layer 2 extracts signals from summary batches (memex-extractor agent, sonnet-class, batch 50). Layer 2.5 runs inline jq/bash rollup (deterministic, no LLM). Layer 3 synthesizes USER.md (memex-profile-builder agent, opus-class, single invocation). Output lives in `<workdir>/profile/` with file-based checkpoints for full resumability under rate limits. Compatible with openclaw-style harnesses. Load when the user asks to "build my profile", "analyze my memory", "figure out who I am from my chats", "xây dựng profile", "phân tích tôi qua memex", "tạo USER.md", "generate user profile for openclaw", "/memex-profile", or "/memex-profile resume". Canonical schemas and algorithms are in `PIPELINE.md` in this folder.
+description: Build or refresh the user's USER.md profile from memex data via a resumable 3-layer pipeline that works in either Codex or Claude Code. Layer 1 summarizes conversations into cached JSON files. Layer 2 extracts signals from summary batches. Layer 2.5 runs a deterministic jq and bash rollup. Layer 3 synthesizes `profile/USER.md`, `state.json`, and a build log. Output lives in `<workdir>/profile/`. Canonical schemas and scoring rules are in `PIPELINE.md`.
 allowed-tools: Bash(memex:*), Bash(jq:*), Bash(wc:*), Bash(cp:*), Bash(ls:*), Bash(ln:*), Bash(date:*), Bash(mkdir:*), Bash(shasum:*), Bash(find:*), Bash(stat:*), Bash(sort:*), Bash(xargs:*), Bash(awk:*), Bash(tr:*), Bash(cat:*), Bash(head:*), Bash(tail:*), Bash(grep:*), Read, Write, Grep, Glob, Agent
 ---
 
 # memex-profile
 
-You (Claude Code) are the **pipeline orchestrator**. This skill is your playbook: when the user asks to build or refresh their profile, follow the steps below. You spawn three specialized agents in sequence, run an inline deterministic rollup between them, verify checkpoints, and handle rate-limit pauses.
+You are the pipeline orchestrator. When the repo-local Codex agents are available, prefer the same four-agent split used by Claude Code: `memex-summarizer`, `memex-extractor`, `memex-profile-builder`, and `memex-memory-navigator` for any recall subtask. If those agents are unavailable, execute the same logic directly in the current session rather than blocking.
 
-**Authoritative architecture & schemas**: `PIPELINE.md` in this folder. Read it when you need specifics about an agent's schema or the rollup algorithm.
+**Authoritative schemas and scoring rules**: `PIPELINE.md` in this folder.
 
 ## When to activate
 
-- User says: "build my profile", "refresh my profile", "analyze who I am", "summarize what I care about", "make a USER.md for openclaw", or Vietnamese equivalents ("xây dựng profile", "phân tích tôi", "tạo USER.md")
-- User invokes `/memex-profile`
-- User invokes `/memex-profile resume` — continue a paused pipeline run after rate limit / quota / interruption
+- "build my profile"
+- "refresh my profile"
+- "analyze who I am from my chats"
+- "xây dựng profile"
+- "phân tích tôi qua memex"
+- "tạo USER.md"
+- "generate user profile for openclaw"
+- "resume the memex profile build"
 
-## The three agents you spawn
+## Core principles
 
-| Layer | Agent | Role | Batch | Output |
-|---|---|---|---|---|
-| 1 | `memex-summarizer` | per-conv summary (metadata + content) | 30 convs/spawn | `memory/summaries/<source>/<y>/<m>/<id>.json` |
-| 2 | `memex-extractor` | signal extraction from summary batches | 50 summaries/spawn | `profile/extracts/batch-NNNN.json` |
-| 2.5 | (YOU — inline) | deterministic rollup (dedupe + stats + trajectory) | — | `profile/aggregate.json` |
-| 3 | `memex-profile-builder` | USER.md synthesis | single invocation | `profile/USER.md` + `state.json` + build log |
+- Treat the pipeline as four phases: summaries → extracts → deterministic rollup → final synthesis.
+- Reuse cached artifacts whenever possible.
+- Never write inside `memory/` except the cached `memory/summaries/` outputs that belong to this pipeline.
+- Do not update `profile/state.json` unless the full build succeeds.
+- Prefer the four-agent topology when the repo-local Codex agents are available; otherwise fall back to direct execution.
 
-Use the `Agent` tool with `subagent_type` set to the agent name above. Pass the JSON work input as the prompt.
+## Outputs
 
-## Orchestration playbook — step by step
+Write only under `<workdir>/profile/`:
 
-### Phase 0 — Setup and freshness
+- `profile/USER.md`
+- `profile/state.json`
+- `profile/logs/build-YYYYMMDD-HHMMSS.md`
+- `profile/logs/pipeline-YYYYMMDD-HHMMSS.log.jsonl`
+- `profile/extracts/batch-NNNN.json`
+
+Layer 1 cache lives under:
+
+- `memory/summaries/<source>/<year>/<month>/<id>.json`
+
+## Phase 0 — setup
 
 ```bash
 WORKDIR="$(memex config get workdir)"
 PROFILE="$WORKDIR/profile"
 mkdir -p "$PROFILE/logs" "$PROFILE/backups" "$PROFILE/extracts"
-
 memex status
 ```
 
-If last sync >7d, surface to user: "Last sync was N days ago. Sync first? (/memex-sync ... or skip)." Don't force; user decides.
+If sync is obviously stale, surface that to the user before spending tokens. Do not force a sync; let the user decide.
 
-### Phase 1 — Check for paused run
+## Phase 1 — detect mode
+
+Mode choices:
+
+- `full`: no prior state, user requested rebuild, or too many new conversations
+- `delta`: prior state exists and the new work is bounded
+- `skip`: nothing changed except maybe session context
+- `resume`: a previous run paused after writing resumable checkpoints
+
+Suggested detection flow:
 
 ```bash
 LAST_LOG=$(ls -1t "$PROFILE/logs/pipeline-"*.log.jsonl 2>/dev/null | head -1)
-if [ -n "$LAST_LOG" ] && tail -5 "$LAST_LOG" | grep -q RESUMABLE_STOP; then
-  MODE=resume
-fi
 ```
 
-If resume: tell the user "Previous pipeline was paused — resuming." Skip Phase 2, proceed directly to Phase 3 (all agents' idempotency means re-running from start is safe — completed units skip via content-hash / input-hash checks).
+If the latest pipeline log ends with `RESUMABLE_STOP`, resume from cached artifacts instead of recomputing finished work.
 
-### Phase 2 — Mode detection
+If `profile/state.json` exists:
 
-```bash
-NEW_CONVOS=0
-MODE=full
+1. Read `sources.memory.max_created_at`
+2. Read `sources.wiki.digest`
+3. Compare against current `catalog.jsonl` and current wiki digest
+4. Use `delta` when changes are small; otherwise `full`
 
-if [ -f "$PROFILE/state.json" ]; then
-  LAST_MAX=$(jq -r '.sources.memory.max_created_at' "$PROFILE/state.json")
-  LAST_WIKI_DIGEST=$(jq -r '.sources.wiki.digest' "$PROFILE/state.json")
+If nothing changed but the current session adds new first-person facts, you may skip Layers 1 and 2 and still rerun the final synthesis step.
 
-  NEW_CONVOS=$(jq -r --arg d "$LAST_MAX" 'select(.created_at > $d) | .id' \
-    "$WORKDIR/memory/catalog.jsonl" | wc -l | tr -d ' ')
+## Phase 2 — capture session context
 
-  CURR_WIKI_DIGEST=$(find "$WORKDIR/wiki" -type f -name '*.md' -print0 \
-    | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | awk '{print $1}')
+Extract concise current-session facts:
 
-  if [ "$NEW_CONVOS" -eq 0 ] && [ "$CURR_WIKI_DIGEST" = "$LAST_WIKI_DIGEST" ]; then
-    MODE=skip
-  elif [ "$NEW_CONVOS" -lt 500 ]; then
-    MODE=delta
-  fi
-fi
-```
+- explicit self-statements
+- current projects
+- preference changes
+- contradictions against existing memory
 
-| Condition | Mode |
-|---|---|
-| No state.json | **full** |
-| User explicitly asked for rebuild | **full** |
-| `NEW_CONVOS >= 500` | **full** (theme decay matters at this scale) |
-| Nothing changed, no new session context | **skip** — tell user "profile is current" |
-| Otherwise | **delta** |
+Pass these forward as structured session context. Session facts outrank stale aggregate signals but must still be cited as current-session statements.
 
-In **skip** mode *with* new session context: still run Layer 3 with empty new-work at Layers 1/2 and fresh session input. Output is a minimal update (Recently changed + state.json bump).
+## Phase 3 — Layer 1 summaries
 
-### Phase 3 — Extract session context (always)
+Purpose: convert each conversation into one cached summary JSON.
 
-Regardless of mode, pull notable facts from the current conversation. Look for:
-- First-person statements about preferences, habits, work
-- Mentions of current projects / tools
-- Anything that contradicts what memory might show
+### Scope
 
-Format as a list that Layer 3 will consume:
+- `full`: default to the last 12 months unless the user asked for a different window
+- `delta`: conversations with `created_at > state.json.sources.memory.max_created_at`
 
-```json
-[
-  {"kind": "self_statement", "text": "I switched from neovim to helix last month"},
-  {"kind": "project", "text": "working on memex profile pipeline"},
-  {"kind": "preference", "text": "prefers Vietnamese for notes, English for code"}
-]
-```
+### Work planning
 
-Keep this list in your working context — you'll pass it into Layer 3.
+Use `catalog.jsonl` to enumerate candidates. For each candidate, decide whether the summary is missing or stale.
 
-### Phase 4 — Layer 1: summarize missing conversations
+Batch size default: 30 conversations.
 
-Open a pipeline log file:
+### Execution
 
-```bash
-TS=$(date +%Y%m%d-%H%M%S)
-PIPELINE_LOG="$PROFILE/logs/pipeline-$TS.log.jsonl"
-touch "$PIPELINE_LOG"
-```
+For each conversation in scope:
 
-#### 4a. Enumerate missing summaries
+1. Read the Markdown file.
+2. Parse frontmatter and body.
+3. Ignore tool payload noise.
+4. Produce the Layer 1 JSON schema described in `PIPELINE.md`.
+5. Write to `memory/summaries/<source>/<year>/<month>/<id>.json`.
 
-Scope by mode:
-- **full**: all convs in `memory/` from the time window (default: last 12 months). Use `jq` on `catalog.jsonl` to filter.
-- **delta**: convs with `created_at > LAST_MAX`.
+If `memex-summarizer` is available, delegate one batch at a time to it. Otherwise execute inline in the main session. After each batch, verify the expected summary files exist before moving on.
 
-For each conv in scope, check if `memory/summaries/<source>/<y>/<m>/<id>.json` exists. If yes, skip (Layer 1 agent would skip anyway, but filtering early avoids spawn overhead). If missing or stale (content_hash mismatch), add to work list.
+## Phase 4 — Layer 2 extracts
 
-```bash
-# Example: list missing summaries for delta mode
-jq -r --arg d "$LAST_MAX" 'select(.created_at > $d) | [.id, .source, .created_at, .relpath] | @tsv' \
-  "$WORKDIR/memory/catalog.jsonl" > /tmp/work_list.tsv
-# Then filter by checking summary file existence
-```
+Purpose: turn cached summaries into batch-level signal extraction files.
 
-#### 4b. Bucket into batches of 30, spawn agents sequentially
+### Batch planning
 
-```
-work_list (N convs) → ceil(N / 30) batches of 30 (last may be partial)
-```
+1. Enumerate summary JSON files in scope.
+2. Sort by `(created_at ASC, id)` for deterministic batching.
+3. Bucket into groups of 50 summaries.
+4. Assign deterministic ids `batch-NNNN`.
 
-For each batch, spawn `memex-summarizer` with the batch as input (see agent's schema for exact shape). Wait for return. Parse its return JSON.
-
-Rules:
-- Start sequential. Do NOT launch many spawns in parallel until you have confidence in rate-limit behavior. Once stable, you may run up to 2-3 in parallel (`run_in_background: true`) to speed up; back off at first 429.
-- After each spawn, verify expected summary files exist on disk. If any expected file is missing, log to `errors-<TS>.jsonl`.
-- Append a line to `$PIPELINE_LOG` per spawn:
-  ```jsonl
-  {"ts": "<ISO>", "layer": 1, "batch_index": 3, "processed": 28, "skipped": 2, "errors": 0}
-  ```
-
-#### 4c. Rate-limit / error handling
-
-If an agent returns `rate_limited: true`:
-1. Write to pipeline log:
-   ```jsonl
-   {"ts": "<ISO>", "layer": 1, "status": "RESUMABLE_STOP", "processed_so_far": <N>, "total": <M>}
-   ```
-2. Report to user:
-   > "Pipeline paused at Layer 1 (~N/M conversations summarized). Run `/memex-profile resume` in a few minutes when rate limits reset."
-3. STOP the pipeline — do not proceed to Layer 2. state.json stays untouched.
-
-### Phase 5 — Layer 2: extract signals from summary batches
-
-#### 5a. Plan batches
-
-```bash
-# Enumerate summaries in time window, sorted chronologically
-find "$WORKDIR/memory/summaries" -name '*.json' -type f \
-  | xargs -I{} jq -r --arg id "{}" '[.created_at, .id, $id] | @tsv' {} \
-  | sort \
-  > /tmp/summaries_sorted.tsv
-```
-
-Bucket into 50-summary batches, each assigned `batch-NNNN` (zero-padded by chronological index).
-
-#### 5b. Check idempotency before spawning
+### Idempotency
 
 For each batch:
 
-1. Read the 50 summaries' `content_hash` values.
-2. Sort them ascending, join with newlines.
-3. Compute `input_hash = shasum -a 256` of that.
-4. If `profile/extracts/batch-NNNN.json` exists AND its stored `input_hash` matches → skip (don't spawn).
-5. Otherwise spawn `memex-extractor` with the batch input.
+1. Compute `input_hash = sha256(join(sort(content_hashes)))`
+2. If `profile/extracts/batch-NNNN.json` exists with the same `input_hash`, skip it
+3. Otherwise read the 50 summaries, extract signals, and write the batch JSON
 
-In **delta** mode: typically only 1-3 trailing batches need re-extraction. In **full** mode: potentially all batches (but cached ones skip fast).
+The signal families stay the same as the canonical pipeline:
 
-#### 5c. Spawn memex-extractor
+- topics
+- tools
+- projects
+- frustrations
+- delights
+- questions_asked
+- self_statements
 
-For each un-skipped batch, spawn sequentially (or small parallel). Agent writes one `profile/extracts/batch-NNNN.json` and returns a status JSON.
+If `memex-extractor` is available, let it own each batch. Otherwise execute the extraction directly in the main session.
 
-Log each spawn to `$PIPELINE_LOG`. On `rate_limited: true`, same pause protocol as Phase 4c but at Layer 2.
+## Phase 5 — Layer 2.5 deterministic rollup
 
-### Phase 6 — Layer 2.5: inline rollup (no agent, no LLM)
+No LLM is required here. Use `jq` and shell directly.
 
-Use `jq` + bash directly. Algorithm is specified in `PIPELINE.md` §Layer 2.5; here's the execution outline:
+Tasks:
 
-#### 6a. Collect all signals across batches
+1. Flatten all batch extract files.
+2. Group signals by normalized key.
+3. Merge and dedupe evidence by `conv_id`.
+4. Compute aggregate stats:
+   - `conv_count`
+   - `total_msgs`
+   - `first_seen`
+   - `last_seen`
+   - `persistence_months`
+   - `recency_score`
+   - `volume_score`
+   - `persistence_score`
+   - `composite_score`
+   - `trajectory`
+5. Compute `metadata_inferred`.
+6. Write `profile/aggregate.json`.
 
-```bash
-# Flatten signals from all batches — one signal entry per line
-jq -c '.signals | to_entries[] | {type: .key, entries: .value}' \
-  "$PROFILE/extracts/"batch-*.json > /tmp/all_signals.jsonl
-```
+Use the normalization, synonym, and scoring rules from `PIPELINE.md`. Keep the rollup deterministic and reproducible.
 
-#### 6b. Group by normalized key, merge evidence
+## Phase 6 — Layer 3 synthesis
 
-Write a small jq pipeline (or generate a bash loop) that:
-- Normalizes each signal's key (topic/tool/project/about/claim/domain)
-- Applies the synonym table (from PIPELINE.md — keep inline in this skill's execution, or read from a small YAML if you split it out)
-- Groups by normalized key
-- Unions evidence across batches, deduping by `conv_id`
+Inputs:
 
-#### 6c. Compute stats per signal
+- `profile/aggregate.json`
+- selected wiki files
+- session context
+- optional previous `profile/USER.md`
 
-For each grouped signal, compute:
-- `conv_count`, `total_msgs`, `first_seen`, `last_seen`, `peak_period`, `persistence_months`
-- `sources`, `modalities` distributions
-- `recency_score`, `volume_score`, `persistence_score`, `composite_score` (formulas in PIPELINE.md)
-- `trajectory` classification (rules in PIPELINE.md)
-- `co_occurs_with` (top 5 other signals sharing ≥2 conv_ids)
-- `evidence_top` (3-5 best evidence entries — most recent or highest msg_count)
+Outputs:
 
-#### 6d. Compute metadata_inferred
+- `profile/USER.md`
+- `profile/state.json`
+- `profile/logs/build-*.md`
 
-Aggregate across all summaries (not extracts):
+Before writing `USER.md`, back up any existing version to `profile/backups/`.
 
-```bash
-# Timezone guess via histogram of created_at hours
-find "$WORKDIR/memory/summaries" -name '*.json' \
-  | xargs jq -r '.created_at[11:13]' \
-  | sort | uniq -c | sort -rn
-# Pick active_hours; infer timezone from quiet-hours trough
+If `memex-profile-builder` is available, use it for this synthesis step. Otherwise perform the synthesis directly here following the same output contract.
 
-# Language distribution
-find "$WORKDIR/memory/summaries" -name '*.json' \
-  | xargs jq -r '.primary_language' \
-  | sort | uniq -c | sort -rn
+Synthesis rules:
 
-# Source distribution from catalog
-jq -r '.source' "$WORKDIR/memory/catalog.jsonl" | sort | uniq -c | sort -rn
-```
+- Prefer concrete evidence links over vague claims.
+- Weave high-confidence themes into prose.
+- Keep contradictions visible in `Recently changed`.
+- Drop one-off noise.
+- Only include historical sections when the user asked for history or the evidence is strong enough to matter.
 
-#### 6e. Write aggregate.json
+## Phase 7 — state and build log
 
-Assemble the final `aggregate.json` per schema in PIPELINE.md §Layer 2.5. Write via Write tool.
+Write `profile/state.json` only after the synthesis step succeeds.
 
-Write dedupe decisions to `$PROFILE/logs/aggregate-$TS.log` for debuggability.
+Populate at least:
 
-#### Implementation note for rollup
+- memory conversation count
+- memory max conversation timestamp
+- memory catalog sha256
+- wiki file count
+- wiki digest
+- whether session context was included
+- theme count
+- citation count
+- backup path if any
 
-If inline jq pipelines get too gnarly (and they might, given the scoring math), you are allowed to write a one-shot bash/jq/awk script to `/tmp/rollup-$TS.sh` and execute it. The script is ephemeral — no permanent file at `plugin/skills/memex-profile/scripts/` in this phase. If we find ourselves doing this every build, that's the signal to promote it to a permanent script — but not yet.
+Also write a human-readable build log that summarizes what was added, reinforced, dropped, or changed.
 
-### Phase 7 — Gather wiki content
+## Resumability and rate limits
 
-```bash
-# Full mode: all wiki .md files
-find "$WORKDIR/wiki" -type f -name '*.md'
+Create `profile/logs/pipeline-YYYYMMDD-HHMMSS.log.jsonl` and append one line per batch or major phase transition.
 
-# Delta mode: only files newer than state.json
-find "$WORKDIR/wiki" -type f -name '*.md' -newer "$PROFILE/state.json"
-```
+If you hit a hard rate limit or cannot continue safely:
 
-Read each file, assemble a list of `{path, content}` objects. Cap total size at ~30KB — if the wiki is bigger, truncate the largest files first and note the truncation in the build log.
+1. Write a `RESUMABLE_STOP` event to the pipeline log.
+2. Stop cleanly without updating `profile/state.json`.
+3. Tell the user how far the pipeline got and that rerunning should resume from checkpoints.
 
-### Phase 8 — Layer 3: synthesize USER.md
+## Validation
 
-#### 8a. Backup existing USER.md
+Before reporting success:
 
-```bash
-TS_BACKUP=$(date +%Y%m%d-%H%M%S)
-[ -f "$PROFILE/USER.md" ] && cp "$PROFILE/USER.md" "$PROFILE/backups/USER.md.$TS_BACKUP"
-```
+- confirm `profile/USER.md` exists
+- confirm `profile/state.json` exists and parses
+- confirm `profile/aggregate.json` exists
+- spot-check at least one evidence link path
 
-#### 8b. Spawn memex-profile-builder (single invocation)
+## Guardrails
 
-Input to the agent:
-
-```json
-{
-  "workdir": "<workdir>",
-  "mode": "<full|delta|skip>",
-  "aggregate_path": "profile/aggregate.json",
-  "wiki_files": [{"path": "...", "content": "..."}, ...],
-  "session_context": [<from Phase 3>],
-  "previous_user_md": "<content only if delta mode>"
-}
-```
-
-Wait for return. Agent writes `USER.md`, `state.json`, and `logs/build-*.md`.
-
-#### 8c. Verify outputs
-
-```bash
-[ -f "$PROFILE/USER.md" ] || echo "ERROR: USER.md missing"
-[ -f "$PROFILE/state.json" ] || echo "ERROR: state.json missing"
-jq -e . "$PROFILE/state.json" >/dev/null || echo "ERROR: state.json malformed"
-```
-
-If any verify fails, surface to user with agent's raw output for debugging.
-
-### Phase 9 — Offer openclaw wiring (optional)
-
-Only prompt if this is the first successful build OR the user asked, AND `~/.openclaw/workspace/` exists:
-
-```bash
-ls ~/.openclaw/workspace/ 2>/dev/null
-```
-
-Ask user:
-- **symlink**: `ln -sfn "$PROFILE/USER.md" ~/.openclaw/workspace/USER.md` — openclaw sees live updates
-- **copy**: `cp "$PROFILE/USER.md" ~/.openclaw/workspace/USER.md` — snapshot, user can edit in openclaw independently
-- **neither**: skip
-
-Default: ask, don't auto-link.
-
-### Phase 10 — Report to user
-
-Summarize the run:
-
-```
-USER.md <built|updated> at: <path>
-Mode: <full|delta|skip|resume>
-Conversations: <total> (new this run: <N>)
-Layer 1 summaries: <done> (+<newly_summarized>)
-Layer 2 batches: <done> (+<newly_extracted>)
-Themes: added <a>, reinforced <r>, unchanged <u>
-Evidence citations: <n>
-Duration: <seconds>s
-Backup: <path or "none — first run">
-Log: <build log path>
-```
-
-If paused (rate-limited) at any phase:
-
-```
-Pipeline PAUSED
-Stopped at: Layer <n>, <progress>
-Progress preserved on disk:
-  - Layer 1: <n> summaries
-  - Layer 2: <n> batches
-Resume: /memex-profile resume (when rate limits reset or billing restores)
-Log: <pipeline log path>
-```
-
-## Conventions and guardrails
-
-- **Work directly.** You ARE the orchestrator; don't spin up another sub-orchestrator agent. Call `memex-summarizer` / `memex-extractor` / `memex-profile-builder` directly via the Agent tool.
-- **Sequential by default.** Spawn one batch agent at a time. Only parallelize after a full pipeline has succeeded once at the current data scale.
-- **Verify every spawn.** After an agent returns, check the expected output files exist on disk and are well-formed (jq validates).
-- **Never skip the pipeline log.** Every spawn, skip, error, and pause writes a line.
-- **Session context is first-class.** Always extract and pass it into Layer 3, even in skip mode if the user said something meaningful.
-- **Ask before openclaw wiring** — never auto-symlink.
-- **Never write to `memory/`.** Layer 1 writes only to `memory/summaries/` which the summarizer agent owns; you don't write there directly.
-- **Never source from `profile/`.** You read it to check state, but no agent's input should include prior USER.md or aggregate content as "source" — only `previous_user_md` for Layer 3 continuity.
-
-## Quick reference — directory layout
-
-```
-<workdir>/
-├── memory/
-│   ├── <source>/YYYY/MM/<id>.md           # raw
-│   └── summaries/<source>/YYYY/MM/<id>.json  # Layer 1
-└── profile/
-    ├── USER.md                             # Layer 3 artifact
-    ├── state.json                          # source snapshot
-    ├── aggregate.json                      # Layer 2.5 output
-    ├── extracts/batch-NNNN.json            # Layer 2 artifacts
-    ├── logs/
-    │   ├── build-*.md                      # human build report
-    │   ├── pipeline-*.log.jsonl            # progress log
-    │   ├── aggregate-*.log                 # rollup dedupe log
-    │   └── errors-*.jsonl                  # per-unit errors
-    └── backups/USER.md.*
-```
+- Prefer the mirrored Codex helper agents when available, but do not fail if they are absent.
+- Do not re-read the entire archive once summaries and extracts already provide the needed layer.
+- Do not rewrite `memory/*.md` conversations.
+- Prefer deterministic shell work over free-form model reasoning whenever the task is mechanical.

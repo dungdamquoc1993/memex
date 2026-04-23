@@ -12,7 +12,7 @@
       "name": "memex",
       "source": "./",
       "description": "Sync AI chat history, navigate memory, build user-profile",
-      "version": "0.1.0",
+      "version": "0.5.6",
       "author": {
         "name": "dungdamquoc",
         "email": "dungdq3@gmail.com"

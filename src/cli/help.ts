@@ -71,6 +71,7 @@ Options:
   --all               Return all matches (overrides --limit)
   --json              Output as JSON instead of a table
 
+Plain-text results show the local absolute file path and, when available, the original conversation URL.
 Results are sorted by most recent update first.
 `,
 

@@ -184,3 +184,79 @@ Chỉ các file/folder trong trường `files` của `package.json` được upl
 ```
 
 Source TypeScript (`src/`) được ship trực tiếp — Bun compile on-the-fly khi chạy, không cần pre-build.
+
+---
+
+## Plugin bundle (Claude Code + Codex)
+
+Repo hiện ship plugin bundle từ cùng một thư mục `plugin/`:
+
+- `plugin/.claude-plugin/plugin.json` cho Claude Code
+- `plugin/.codex-plugin/plugin.json` cho Codex
+- `plugin/skills/` dùng chung cho cả hai
+- `plugin/agents/` giữ lại cho Claude Code
+- `/.codex/agents/` là repo-local helper templates cho Codex, hiện mirror đủ 4 vai trò của Claude Code: navigator, summarizer, extractor, profile-builder
+
+Codex repo marketplace được khai báo ở:
+
+```text
+/.agents/plugins/marketplace.json
+```
+
+Claude-style repo marketplace vẫn giữ ở:
+
+```text
+/.claude-plugin/marketplace.json
+```
+
+### Versioning checklist khi release
+
+Khi thay đổi plugin surface, sync version ở các file sau:
+
+```text
+package.json
+plugin/.claude-plugin/plugin.json
+plugin/.claude-plugin/marketplace.json
+plugin/.codex-plugin/plugin.json
+.claude-plugin/marketplace.json
+```
+
+`/.agents/plugins/marketplace.json` không mang field version ở entry local, nên không cần bump.
+
+### Publish checklist cho plugin
+
+1. Xác nhận cả hai manifest (`plugin/.claude-plugin/plugin.json` và `plugin/.codex-plugin/plugin.json`) parse được.
+2. Xác nhận `/.claude-plugin/marketplace.json` và `/.agents/plugins/marketplace.json` còn trỏ đúng tới plugin root.
+3. Xác nhận `plugin/README.md` còn đúng cho cả Claude Code lẫn Codex.
+4. Test discovery:
+   - Claude Code đọc được marketplace/plugin như cũ
+   - Codex đọc được repo marketplace qua `/.agents/plugins/marketplace.json`
+5. Commit các file trong `plugin/`, `/.claude-plugin/`, `/.agents/plugins/`, `/.codex/agents/`
+
+### Repo-local parity checklist cho Codex
+
+Để giữ parity giữa Claude Code và Codex trong repo này, xác nhận `/.codex/agents/` luôn có đủ:
+
+```text
+memex-memory-navigator.toml
+memex-summarizer.toml
+memex-extractor.toml
+memex-profile-builder.toml
+```
+
+Nếu thay đổi contract ở `plugin/agents/*.md` hoặc `plugin/skills/memex-profile/PIPELINE.md`, cập nhật các agent `.toml` tương ứng để hành vi Codex không lệch Claude Code.
+
+### Lưu ý về npm publish
+
+`npm publish` hiện **không** ship thư mục `plugin/`, vì trường `files` trong `package.json` chỉ include:
+
+```json
+"files": ["bin", "src", "README.md", "LICENSE"]
+```
+
+Điều đó nghĩa là:
+
+- npm package vẫn publish CLI `memex`
+- plugin cho Claude Code và Codex hiện được phân phối qua repo Git / local path, không qua npm tarball
+
+Nếu sau này muốn plugin đi theo npm package, cần mở rộng `files` để include `plugin/` và các marketplace/helper files liên quan.
