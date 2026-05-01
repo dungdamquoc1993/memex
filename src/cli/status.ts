@@ -101,6 +101,7 @@ export async function status() {
   console.log(`  ${'Wiki'.padEnd(12)} ${paths.wiki}${pathStatus(paths.wiki)}`);
   console.log(`  ${'References'.padEnd(12)} ${paths.references}${pathStatus(paths.references)}`);
   console.log(`  ${'Scripts'.padEnd(12)} ${paths.scripts}${pathStatus(paths.scripts)}`);
+  console.log(`  ${'User profile'.padEnd(12)} ${paths.profile}${pathStatus(paths.profile)}`);
   console.log(`  ${'State'.padEnd(12)} ${paths.state}${pathStatus(paths.state)}`);
   console.log(`  ${'Logs'.padEnd(12)} ${paths.logs}${pathStatus(paths.logs)}`);
   console.log(`  ${'State DB'.padEnd(12)} ${paths.syncDb}` + (existsSync(paths.syncDb) ? ` (${formatBytes(statSync(paths.syncDb).size)})` : ' (not created)'));

@@ -9,6 +9,8 @@ import { saveConfig } from './config.ts';
 const MANIFEST_NAME = 'memex-backup.json';
 const REQUIRED_PROFILE_DIRS = ['state', 'logs'];
 const REQUIRED_WORKDIR_DIRS = ['memory', 'wiki', 'scripts'];
+/** Dirs staged under backup `workdir/` (includes optional user profile pipeline output). */
+const EXPORT_WORKDIR_DIRS = [...REQUIRED_WORKDIR_DIRS, 'profile'];
 
 // v1: legacy — single ".memex/" tree. v2: "profile/" + "workdir/" split.
 type FormatVersion = 1 | 2;
@@ -259,20 +261,19 @@ export async function exportProfile(outputFile?: string): Promise<void> {
     // fs.cp is cross-platform (macOS/Linux/Windows) — avoids shelling out to `cp`.
     await cp(paths.profileRoot, profileStage, { recursive: true });
 
-    // workdir/ always contains memory/wiki/scripts regardless of whether workdir
-    // equals profileRoot (legacy) or is a separate path.
+    // workdir/ contains memory/wiki/scripts and optional pipeline `profile/` (USER.md).
     const workdirStage = join(stageDir, 'workdir');
     await mkdir(workdirStage, { recursive: true });
-    for (const d of REQUIRED_WORKDIR_DIRS) {
+    for (const d of EXPORT_WORKDIR_DIRS) {
       const src = join(paths.workdir, d);
       if (existsSync(src)) {
         await cp(src, join(workdirStage, d), { recursive: true });
       }
     }
-    // If workdir == profileRoot, strip memory/wiki/scripts from the profile stage
-    // to avoid duplication in the archive.
+    // If workdir == profileRoot, strip the same dirs from the profile stage to
+    // avoid duplication in the archive.
     if (paths.workdir === paths.profileRoot) {
-      for (const d of REQUIRED_WORKDIR_DIRS) {
+      for (const d of EXPORT_WORKDIR_DIRS) {
         await rm(join(profileStage, d), { recursive: true, force: true });
       }
     }
@@ -451,7 +452,7 @@ export async function importProfile(
     if (targetWorkdir === paths.profileRoot) {
       // Workdir content must live alongside state/logs in profile root.
       if (archive.manifest.format_version === 2) {
-        for (const d of REQUIRED_WORKDIR_DIRS) {
+        for (const d of EXPORT_WORKDIR_DIRS) {
           const src = join(extractedWorkdir, d);
           if (existsSync(src)) {
             await moveDir(src, join(paths.profileRoot, d));
@@ -464,9 +465,9 @@ export async function importProfile(
       if (archive.manifest.format_version === 2) {
         await moveDir(extractedWorkdir, targetWorkdir);
       } else {
-        // v1: carve memory/wiki/scripts from profile root into the new workdir.
+        // v1: carve workdir-ish dirs from profile root into the new workdir.
         await mkdir(targetWorkdir, { recursive: true });
-        for (const d of REQUIRED_WORKDIR_DIRS) {
+        for (const d of EXPORT_WORKDIR_DIRS) {
           const src = join(paths.profileRoot, d);
           if (existsSync(src)) {
             await moveDir(src, join(targetWorkdir, d));

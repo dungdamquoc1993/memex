@@ -42,6 +42,9 @@ export async function init(opts: { workdirFlag?: string } = {}): Promise<void> {
   // Scripts
   await mkdir(paths.scripts, { recursive: true });
 
+  // User profile build (memex-profile pipeline → USER.md, etc.)
+  await mkdir(paths.profile, { recursive: true });
+
   // Persist workdir to config.json (idempotent — always record current choice).
   // Source of truth for resolution: flag > env > config > default. We save the
   // effective workdir so future invocations without flag/env still use it.
@@ -49,7 +52,7 @@ export async function init(opts: { workdirFlag?: string } = {}): Promise<void> {
 
   console.log(`Initialized memex`);
   console.log(`  Profile: ${paths.profileRoot}  (state, logs, config)`);
-  console.log(`  Workdir: ${paths.workdir}  (memory, wiki, scripts)`);
+  console.log(`  Workdir: ${paths.workdir}  (memory, wiki, scripts, profile)`);
   if (opts.workdirFlag) {
     console.log(`  (workdir set via --workdir; persisted to ${paths.configFile})`);
   }

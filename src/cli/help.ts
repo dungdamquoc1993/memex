@@ -33,7 +33,7 @@ Usage:
   memex init [--workdir <path>]
 
 Creates the profile directory at ~/.memex (state, logs, config.json) and the
-workdir (memory, wiki, scripts). Workdir defaults to ~/.memex but can be set
+workdir (memory, wiki, scripts, profile). Workdir defaults to ~/.memex but can be set
 to any path; the choice is persisted to config.json.
 `,
 

@@ -54,6 +54,8 @@ function build(workdir: string) {
     workdir,
     memory: join(workdir, 'memory'),
     wiki: join(workdir, 'wiki'),
+    /** Pipeline output (`USER.md`, extracts, summaries cache) lives here; not ~/.memex. */
+    profile: join(workdir, 'profile'),
     raw: join(workdir, 'memory', 'raw'),
     attachments: join(workdir, 'memory', 'attachments'),
     wikiDomains: join(workdir, 'wiki', 'domains'),
