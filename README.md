@@ -1,4 +1,4 @@
-# memex
+## memex
 
 [![npm version](https://img.shields.io/npm/v/@dungdq3/memex.svg?style=flat)](https://www.npmjs.com/package/@dungdq3/memex)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
