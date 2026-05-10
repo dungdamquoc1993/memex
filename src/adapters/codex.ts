@@ -160,8 +160,7 @@ export class CodexAdapter implements Adapter {
         pendingCalls.set(callId, { name, input });
       } else if (pType === 'function_call_output') {
         const callId = payload.call_id as string || '';
-        const rawOutput = payload.output as string || '';
-        const cleaned = this.cleanToolOutput(rawOutput);
+        const cleaned = this.cleanToolOutput(payload.output);
         const output = cleaned.slice(0, 2000);
         const call = pendingCalls.get(callId);
         if (call) {
@@ -247,14 +246,30 @@ export class CodexAdapter implements Adapter {
   }
 
   // Strip Codex tool output metadata prefix: "Chunk ID: ...\nWall time: ...\n..."
-  private cleanToolOutput(raw: string): string {
+  // Codex may store `output` as a string, or as an object (e.g. { output, metadata }).
+  private cleanToolOutput(raw: unknown): string {
+    if (raw === null || raw === undefined) return '';
+
+    if (typeof raw === 'object') {
+      const o = raw as Record<string, unknown>;
+      if (typeof o.output === 'string') {
+        return this.cleanToolOutput(o.output);
+      }
+      return JSON.stringify(raw);
+    }
+
+    if (typeof raw !== 'string') {
+      return String(raw);
+    }
+
     // Parse JSON wrapper if present (Codex wraps output in {"output":"...","metadata":{...}})
     try {
-      const parsed = JSON.parse(raw) as { output?: string };
+      const parsed = JSON.parse(raw) as { output?: unknown };
       if (typeof parsed.output === 'string') {
-        return parsed.output;
+        return this.cleanToolOutput(parsed.output);
       }
     } catch {}
+
     // Strip plain-text metadata header lines added by Codex
     return raw.replace(/^(Chunk ID:.*\n)?(Wall time:.*\n)?(Process exited.*\n)?(Original token count:.*\n)?(Output:\n)?/, '');
   }
