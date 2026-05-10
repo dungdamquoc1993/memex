@@ -7,10 +7,10 @@
 **memex** is a CLI tool that aggregates your AI chat history from multiple platforms into a single, searchable Markdown archive. It integrates with [qmd](https://github.com/dungdamquoc1993/qmd) for semantic search and LLM context injection.
 
 ```
-AI Platforms          memex sync         workdir/               qmd
-─────────────    ──────────────────▶    ───────────────    ──────────────
-Claude Code            convert            memory/          qmd search
-ChatGPT           (normalize to .md)     wiki/            qmd query
+AI Platforms          memex sync         workdir/               qmd / memex
+─────────────    ──────────────────▶    ───────────────    ───────────────────
+Claude Code            convert            memory/          qmd search · query
+ChatGPT           (normalize to .md)     wiki/            memex search (index)
 Claude.ai
 Gemini                                  ~/.memex/
 Grok                                     state/sync.db
@@ -58,6 +58,8 @@ memex --help
 ```
 
 With `bun link`, edits in the repo affect the global `memex` command immediately.
+
+On each push or PR to `main`, [CI](https://github.com/dungdamquoc1993/memex/actions/workflows/ci.yml) runs `bun install`, `tsc --noEmit`, and `bun run build`.
 
 ### Check where `memex` is coming from
 
@@ -158,17 +160,25 @@ memex init --workdir ~/Dropbox/memex-data
 memex sync claude_code
 
 # 3. For web platforms (ChatGPT, Claude.ai, Gemini, Grok, DeepSeek):
-#    Get the browser snippet pre-filled with your last sync date
+#    Generate the browser script (saved under <workdir>/scripts/ and copied to clipboard)
 memex sync-script chatgpt
 
 #    Open chatgpt.com → DevTools (F12) → Console → paste → Enter
-#    Move the downloaded file, then sync:
+#    Move the downloaded JSON into the raw folder, then sync:
 mv ~/Downloads/chatgpt_*.json "$(memex config get workdir)/memory/raw/chatgpt/"
 memex sync chatgpt
 
-# 4. Check status
+# 4. List or filter conversations (uses the local index in sync.db)
+memex search --limit 5
+
+# 5. Check status (paths, per-source counts, disk usage)
 memex status
+
+# Optional: environment / profile sanity check
+memex doctor
 ```
+
+**Global options** (all commands): `--workdir <path>`, `-h` / `--help`, `-v` / `--version`, `--debug` (or `MEMEX_DEBUG=1`).
 
 ---
 
@@ -179,7 +189,7 @@ memex status
 Initialize the memex profile. Run once after install.
 
 - Internal state (`state/`, `logs/`, `config.json`) always lives in `~/.memex/`.
-- User content (`memory/`, `wiki/`, `scripts/`) goes into the **workdir** — defaults to `~/.memex/` but can be set to any path (Dropbox, iCloud Drive, a git repo, etc.).
+- User content (`memory/`, `wiki/`, `scripts/`, `profile/`) goes into the **workdir** — defaults to `~/.memex/` but can be set to any path (Dropbox, iCloud Drive, a git repo, etc.).
 
 ```sh
 memex init                              # workdir = ~/.memex (default)
@@ -190,25 +200,28 @@ The chosen workdir is persisted to `~/.memex/config.json` so subsequent commands
 
 ---
 
-### `memex sync [source] [--dry-run]`
+### `memex sync [source] [--dry-run] [--no-index] [--rebuild-index] [--force]`
 
-Sync one or all sources. Sync is **incremental and idempotent** — unchanged conversations are skipped by content hash.
+Sync one or all sources. Sync is **incremental and idempotent** — unchanged conversations are skipped by content hash. With indexing enabled (default), each run refreshes the `conversations` index and `<workdir>/memory/catalog.jsonl`.
 
 ```sh
-memex sync                  # sync all configured sources
-memex sync claude_code      # sync Claude Code only
-memex sync chatgpt          # sync ChatGPT only
-memex sync deepseek         # sync DeepSeek only
-memex sync --dry-run        # preview changes, no files written
+memex sync                     # all sources
+memex sync claude_code         # Claude Code only
+memex sync chatgpt             # ChatGPT only
+memex sync deepseek            # DeepSeek only
+memex sync --dry-run           # preview only, no writes
+memex sync --no-index          # skip catalog / conversations table update
+memex sync --rebuild-index     # rebuild index from existing .md files under memory/
+memex sync --force             # re-process every conversation (ignore hash skip)
 ```
 
 Supported sources: `chatgpt`, `claude_web` (alias: `claude`), `gemini`, `grok`, `deepseek`, `claude_code`, `codex`, `openclaw`
 
 ---
 
-### `memex sync-script <source>`
+### `memex sync-script <source> [dir] [--full]`
 
-Print a browser console snippet pre-filled with your last sync date for a web platform. Paste the output into the browser's DevTools Console while logged in.
+Generate a browser console script for a web platform. The script is **written to** `<workdir>/scripts/<source>.js` (or under `[dir]` if you pass a directory) and **copied to the clipboard** when `pbcopy` / `xclip` / `xsel` is available. Variables such as `SINCE_DATE` are injected from your last sync when possible. Use `--full` to ignore sync history and fetch everything.
 
 ```sh
 memex sync-script chatgpt
@@ -216,26 +229,49 @@ memex sync-script claude
 memex sync-script gemini
 memex sync-script grok
 memex sync-script deepseek
+memex sync-script chatgpt ~/Desktop              # save script under ~/Desktop
+memex sync-script chatgpt --full                 # full export script
 ```
 
-Browser scripts use the browser's own runtime auth (cookies/tokens from the active session). No credentials are hardcoded or exported to disk.
+Browser scripts rely on the browser session (cookies/tokens). No credentials are stored in the repo.
+
+---
+
+### `memex search`
+
+Query the local conversation index (SQLite `conversations` table, populated during sync). Plain-text output includes absolute paths to `.md` files and original URLs when present.
+
+```sh
+memex search --search sourdough --limit 10
+memex search --source chatgpt,claude_code --since 2026-01-01 --json
+memex search --all --source gemini
+```
+
+---
+
+### `memex doctor`
+
+Runs Bun version checks, profile/workdir layout, `sync.db` readability, `config.json`, and compares the installed package version to the latest on npm. Exits `1` if any check fails.
+
+```sh
+memex doctor
+```
 
 ---
 
 ### `memex status`
 
-Show sync statistics from `sync.db`.
+Prints per-source conversation counts and last sync time from `sync.db`, resolved profile/workdir paths, folder sizes, markdown and raw file counts, and total disk usage.
 
 ```
 Source          | Conversations | Last Sync
 ----------------|---------------|--------------------
 chatgpt         |         2479 | 2026-04-14 04:23:32
 claude_code     |           17 | 2026-04-14 04:23:08
-claude_web      |          187 | 2026-04-14 04:23:40
-gemini          |          327 | 2026-04-14 04:23:47
-grok            |           12 | 2026-04-15 06:38:18
-deepseek        |           25 | 2026-04-15 06:57:29
+...
 ```
+
+*(Example output; your numbers will differ.)*
 
 ---
 
@@ -254,11 +290,11 @@ memex config path                       # print path to config.json
 
 ### `memex export [file]`
 
-Back up both the profile root (`~/.memex/`) and the workdir to a single `.tar.gz` archive.
+Back up both the profile root (`~/.memex/`) and the workdir to a single `.tar.gz` archive (requires `tar` on `PATH`).
 
 ```sh
-memex export                            # creates ./memex-profile-YYYYMMDD-HHMMSS.tar.gz
-memex export ~/backup/memex.tar.gz      # write to specific path
+memex export                            # ./memex-profile-<timestamp>.tar.gz in cwd
+memex export ~/backup/memex.tar.gz      # explicit path
 ```
 
 ---
@@ -275,17 +311,20 @@ memex verify ~/backup/memex.tar.gz
 
 ### `memex import <file> [--replace] [--workdir <path>]`
 
-Restore a backup. Fails if target paths already exist unless `--replace` is passed (moves existing data to `*.backup-<timestamp>` first, never deletes).
+Restore a backup. **First-time restore:** `~/.memex` (and the target workdir if separate) must not already exist, **or** pass `--replace` so existing trees are moved aside to `*.backup-<timestamp>` before extraction (nothing is deleted in place).
 
 ```sh
+# Typical first restore on a clean machine
 memex import ~/backup/memex.tar.gz
+
+# Replace an existing profile/workdir (previous dirs renamed aside)
 memex import ~/backup/memex.tar.gz --replace
 
-# Restore to a different workdir (e.g. when moving to a new machine)
+# Restore workdir to a new location (e.g. new machine or different drive)
 memex import ~/backup/memex.tar.gz --workdir ~/new/memex-data
 ```
 
-If the archive's original workdir path is not available on the current machine, memex will fail with a clear error and suggest the `--workdir` flag rather than silently restoring to the wrong location.
+If the archive's original workdir path is missing or wrong for this machine, use `--workdir` explicitly — memex avoids silently restoring to an unintended location.
 
 ---
 
@@ -318,6 +357,7 @@ memex separates internal state from user content into two roots:
 
 <workdir>/                            # Configurable — default is also ~/.memex
 ├── memory/                           # Immutable — written by memex only
+│   ├── catalog.jsonl                 # Regenerated when sync indexes (all conversations)
 │   ├── chatgpt/
 │   │   └── 2026/04/<id>.md           # Normalized Markdown
 │   ├── claude_web/
@@ -341,7 +381,9 @@ memex separates internal state from user content into two roots:
 │   ├── profile.md                    # Personal context — LLM compiled
 │   └── index.md                      # Content catalog
 │
-└── scripts/                          # Generated browser export scripts
+├── profile/                          # User profile pipeline output (e.g. USER.md); optional
+│
+└── scripts/                          # Generated browser export snippets (`memex sync-script`)
 ```
 
 **Workdir resolution order** (highest priority first):
@@ -351,9 +393,10 @@ memex separates internal state from user content into two roots:
 4. Default: `~/.memex`
 
 **Rules:**
-- `memory/` and `wiki/` contain only `.md` files — these are what qmd indexes.
+- **Indexed by qmd:** `.md` under `memory/` (except `raw/` and `attachments/`) and under `wiki/` (except `references/`).
+- **`memex search`** uses the SQLite index plus paths under `memory/`; `catalog.jsonl` is convenient for jq pipelines and tooling.
 - `memory/raw/` is append-only; do not edit manually.
-- `attachments/` and `references/` are not indexed.
+- `attachments/` and `wiki/references/` are not indexed by qmd.
 - `state/` is internal; do not edit manually.
 
 Each conversation is stored as one `.md` file with YAML frontmatter:
@@ -433,7 +476,7 @@ export class MyPlatformAdapter implements Adapter {
 
 Steps:
 1. Create `src/adapters/<platform>.ts` implementing `Adapter`
-2. Place raw exports in `~/.memex/memory/raw/<platform>/`
+2. Place raw exports in `<workdir>/memory/raw/<platform>/`
 3. Register in `src/cli/sync.ts` in the `ADAPTERS` object
 4. If browser-based, add `src/browser-scripts/<platform>.js` using `SINCE_DATE` for incremental sync
 5. Add the source key to the `Source` union in `src/normalize/schema.ts`
