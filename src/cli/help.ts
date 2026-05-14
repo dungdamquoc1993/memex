@@ -7,7 +7,7 @@ Usage:
 
 Commands:
   init          Create profile (state in ~/.memex, content in <workdir>)
-  sync          Sync chat history from a source (chatgpt, claude, claude_code, ...)
+  sync          Sync chat history from a source (chatgpt, claude, claude_code, cursor, ...)
   search        List and search conversations
   status        Show sync stats and disk usage
   sync-script   Save browser export script to file + copy to clipboard
@@ -44,7 +44,7 @@ Usage:
 
 Arguments:
   source              One of: chatgpt, claude (alias claude_web), claude_code,
-                      gemini, codex, openclaw, grok, deepseek. Omit to sync all.
+                      gemini, codex, openclaw, grok, deepseek, cursor. Omit to sync all.
 
 Options:
   --dry-run           Show what would change without writing files

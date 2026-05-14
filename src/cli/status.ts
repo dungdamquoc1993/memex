@@ -3,7 +3,7 @@ import { existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { paths } from '../profile/paths.ts';
 
-const SOURCES = ['chatgpt', 'claude_web', 'gemini', 'claude_code', 'codex', 'openclaw', 'grok', 'deepseek'];
+const SOURCES = ['chatgpt', 'claude_web', 'gemini', 'claude_code', 'codex', 'openclaw', 'grok', 'deepseek', 'cursor'];
 
 function dirSize(dir: string): number {
   if (!existsSync(dir)) return 0;

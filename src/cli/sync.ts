@@ -10,6 +10,7 @@ import { CodexAdapter } from '../adapters/codex.ts';
 import { OpenClawAdapter } from '../adapters/openclaw.ts';
 import { GrokAdapter } from '../adapters/grok.ts';
 import { DeepSeekAdapter } from '../adapters/deepseek.ts';
+import { CursorAgentAdapter } from '../adapters/cursor.ts';
 import { conversationToMarkdown } from '../normalize/markdown.ts';
 import { checkSync, recordSync, hashContent, closeDb, upsertConversation, conversationCount, clearConversations, exportIndex } from '../profile/state.ts';
 import { paths } from '../profile/paths.ts';
@@ -24,6 +25,7 @@ const ADAPTERS: Record<Source, () => Adapter> = {
   openclaw: () => new OpenClawAdapter(),
   grok: () => new GrokAdapter(),
   deepseek: () => new DeepSeekAdapter(),
+  cursor: () => new CursorAgentAdapter(),
 };
 
 function wordCount(text: string): number {
@@ -90,7 +92,7 @@ export async function sync(sourceArg?: string, dryRun = false, opts: { noIndex?:
 
   const sources: Source[] = sourceArg
     ? [sourceArg as Source]
-    : ['claude_code', 'chatgpt', 'claude_web', 'gemini', 'codex', 'openclaw', 'grok', 'deepseek'];
+    : ['claude_code', 'chatgpt', 'claude_web', 'gemini', 'codex', 'openclaw', 'grok', 'deepseek', 'cursor'];
 
   let totalNew = 0;
   let totalUpdated = 0;

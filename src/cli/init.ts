@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { paths } from '../profile/paths.ts';
 import { saveConfig } from './config.ts';
 
-const SOURCES = ['chatgpt', 'claude_web', 'gemini', 'claude_code', 'codex', 'openclaw', 'grok', 'deepseek'];
+const SOURCES = ['chatgpt', 'claude_web', 'gemini', 'claude_code', 'codex', 'openclaw', 'grok', 'deepseek', 'cursor'];
 
 export async function init(opts: { workdirFlag?: string } = {}): Promise<void> {
   if (existsSync(paths.profileRoot)) {

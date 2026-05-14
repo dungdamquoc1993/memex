@@ -1,4 +1,4 @@
-export type Source = 'chatgpt' | 'claude_web' | 'gemini' | 'claude_code' | 'codex' | 'openclaw' | 'grok' | 'deepseek';
+export type Source = 'chatgpt' | 'claude_web' | 'gemini' | 'claude_code' | 'codex' | 'openclaw' | 'grok' | 'deepseek' | 'cursor';
 
 export interface Conversation {
   id: string;                    // <source>_<original_id>
